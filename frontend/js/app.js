@@ -6,9 +6,18 @@
 
   let framingPresets = [];
   let openingPresets = [];
+  let currentUser = null;
 
   // -------------------- Boot --------------------
   window.addEventListener("DOMContentLoaded", async () => {
+    try {
+      currentUser = await API.getSession();
+    } catch (e) {
+      window.location.href = "/login";
+      return;
+    }
+    updateAuthUI();
+
     Calc.init();
 
     WallView.init({
@@ -77,10 +86,21 @@
     };
     $("btnSave").onclick = saveProject;
     $("btnSaveAs").onclick = async () => {
+      const currentName = State.get().projectName || "Untitled Project";
+      const nextName = await openSaveAsModal(currentName);
+      if (!nextName || !nextName.trim()) return;
+      State.set({ projectName: nextName.trim() });
       State.get().projectId = null; // force create
       await saveProject(true);
     };
     $("btnOpen").onclick = openProjectsModal;
+    $("btnLogout").onclick = async () => {
+      try {
+        await API.logout();
+      } finally {
+        window.location.href = "/login";
+      }
+    };
     $("btnUndo").onclick = () => State.undo();
     $("btnRedo").onclick = () => State.redo();
     $("btnPrint").onclick = doPrint;
@@ -116,6 +136,20 @@
       el.addEventListener("click", () => $("modalOpen").classList.add("hidden")));
     $("modalOpen").addEventListener("click", (e) => {
       if (e.target.id === "modalOpen") $("modalOpen").classList.add("hidden");
+    });
+    document.querySelectorAll("#modalSaveAs [data-close]").forEach(el =>
+      el.addEventListener("click", () => closeSaveAsModal(null)));
+    $("modalSaveAs").addEventListener("click", (e) => {
+      if (e.target.id === "modalSaveAs") closeSaveAsModal(null);
+    });
+    $("btnSaveAsConfirm").addEventListener("click", () => {
+      closeSaveAsModal($("saveAsName").value);
+    });
+    $("saveAsName").addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        closeSaveAsModal($("saveAsName").value);
+      }
     });
 
     $("btnAddDoor").onclick = () => addDefaultOpening("door");
@@ -494,6 +528,29 @@
     }
   }
 
+  let saveAsResolver = null;
+  function openSaveAsModal(currentName) {
+    const modal = $("modalSaveAs");
+    const input = $("saveAsName");
+    input.value = currentName;
+    modal.classList.remove("hidden");
+    input.focus();
+    input.select();
+    return new Promise((resolve) => {
+      saveAsResolver = resolve;
+    });
+  }
+
+  function closeSaveAsModal(value) {
+    const modal = $("modalSaveAs");
+    modal.classList.add("hidden");
+    if (saveAsResolver) {
+      const resolve = saveAsResolver;
+      saveAsResolver = null;
+      resolve(value);
+    }
+  }
+
   async function openProjectsModal() {
     const m = $("modalOpen");
     m.classList.remove("hidden");
@@ -530,6 +587,11 @@
   function updateProjectNameUI() {
     const el = $("projectName");
     if (el.textContent !== State.get().projectName) el.textContent = State.get().projectName;
+  }
+  function updateAuthUI() {
+    if ($("sessionEmail")) {
+      $("sessionEmail").textContent = currentUser ? currentUser.email : "—";
+    }
   }
   function updateUnitsModeUI() {
     $("selUnits").value = State.get().unitsMode;

@@ -26,6 +26,22 @@ class ProjectSummary(BaseModel):
     updated_at: str
 
 
+class SessionUser(BaseModel):
+    id: int
+    email: str
+    created_at: str
+
+
+class RegisterIn(BaseModel):
+    email: str = Field(min_length=5, max_length=120, pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+    password: str = Field(min_length=8, max_length=200)
+
+
+class LoginIn(BaseModel):
+    email: str = Field(min_length=5, max_length=120, pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+    password: str = Field(min_length=8, max_length=200)
+
+
 class FramingPreset(BaseModel):
     id: Optional[int] = None
     name: str

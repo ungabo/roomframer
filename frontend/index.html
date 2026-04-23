@@ -33,6 +33,11 @@
     </label>
   </div>
 
+  <div class="auth-actions">
+    <div class="auth-user">Signed in as <strong id="sessionEmail">—</strong></div>
+    <button id="btnLogout" class="btn" title="Sign out">Log Out</button>
+  </div>
+
   <div id="projectName" class="project-name" contenteditable="true" spellcheck="false">Untitled Wall</div>
 </header>
 
@@ -313,6 +318,22 @@
   <div class="modal-card">
     <div class="modal-head">Open Project <button class="x" data-close>×</button></div>
     <div class="modal-body"><ul id="projectList" class="proj-list"></ul></div>
+  </div>
+</div>
+
+<div id="modalSaveAs" class="modal hidden no-print">
+  <div class="modal-card">
+    <div class="modal-head">Save Project As <button class="x" data-close>×</button></div>
+    <div class="modal-body">
+      <div class="row" style="grid-template-columns: 1fr; gap: 8px; margin-bottom: 10px;">
+        <label for="saveAsName">Project Name</label>
+        <input id="saveAsName" type="text" maxlength="120">
+      </div>
+      <div class="btn-row" style="justify-content: flex-end;">
+        <button id="btnSaveAsCancel" class="btn" type="button" data-close>Cancel</button>
+        <button id="btnSaveAsConfirm" class="btn primary" type="button">Save Copy</button>
+      </div>
+    </div>
   </div>
 </div>
 

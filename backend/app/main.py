@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 from pathlib import Path
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
 
+from .auth import optional_current_user
 from .routes import router
 
 BASE_DIR = Path(__file__).resolve().parents[2]  # .../designer
@@ -15,8 +16,24 @@ app.include_router(router)
 
 
 @app.get("/")
-def index():
+def index(request: Request):
+    if optional_current_user(request) is None:
+        return RedirectResponse("/login", status_code=303)
     return FileResponse(FRONTEND_DIR / "index.html")
+
+
+@app.get("/login")
+def login_page(request: Request):
+    if optional_current_user(request) is not None:
+        return RedirectResponse("/", status_code=303)
+    return FileResponse(FRONTEND_DIR / "login.html")
+
+
+@app.get("/register")
+def register_page(request: Request):
+    if optional_current_user(request) is not None:
+        return RedirectResponse("/", status_code=303)
+    return FileResponse(FRONTEND_DIR / "register.html")
 
 
 # Static frontend assets

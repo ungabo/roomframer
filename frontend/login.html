@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sign In | Wall Framing Designer</title>
+<link rel="stylesheet" href="/static/css/styles.css">
+</head>
+<body class="auth-page">
+  <main class="auth-shell">
+    <section class="auth-card">
+      <header class="auth-hero">
+        <div class="auth-kicker">Wall Framing Designer</div>
+        <h1>Sign in</h1>
+        <p>Your saved projects and presets are tied to your account.</p>
+      </header>
+      <div class="auth-body">
+        <form class="auth-form" data-auth-form="login">
+          <div class="auth-field">
+            <label for="email">Email</label>
+            <input id="email" name="email" type="email" autocomplete="email" required>
+          </div>
+          <div class="auth-field">
+            <label for="password">Password</label>
+            <input id="password" name="password" type="password" autocomplete="current-password" required>
+          </div>
+          <div id="authStatus" class="auth-status" aria-live="polite"></div>
+          <button class="btn primary auth-submit" type="submit">Sign In</button>
+        </form>
+        <div class="auth-note">Sessions are stored in an HTTP-only cookie and stay active until they expire or you log out.</div>
+        <div class="auth-links">Need an account? <a href="/register">Create one</a></div>
+      </div>
+    </section>
+  </main>
+  <script src="/static/js/auth.js"></script>
+</body>
+</html>

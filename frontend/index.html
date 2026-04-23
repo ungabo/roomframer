@@ -1,0 +1,418 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wall Framing Designer</title>
+<link rel="stylesheet" href="/static/css/styles.css">
+</head>
+<body>
+
+<header class="topbar no-print">
+  <div class="brand">Wall Framing Designer</div>
+
+  <div class="toolbar">
+    <button id="btnNew" class="btn" title="New project">New</button>
+    <button id="btnSave" class="btn" title="Save to database">Save</button>
+    <button id="btnSaveAs" class="btn" title="Save copy">Save As…</button>
+    <button id="btnOpen" class="btn" title="Open a saved project">Open…</button>
+    <span class="sep"></span>
+    <button id="btnUndo" class="btn" title="Undo (Ctrl+Z)">Undo</button>
+    <button id="btnRedo" class="btn" title="Redo (Ctrl+Y)">Redo</button>
+    <span class="sep"></span>
+    <button id="btnCalc" class="btn" title="Ft/In calculator">Ft/In Calc</button>
+    <button id="btnPrint" class="btn" title="Print the drawing">Print</button>
+    <button id="btnExportSvg" class="btn" title="Export this elevation as SVG">Export SVG</button>
+    <span class="sep"></span>
+    <label class="units-toggle">
+      Units:
+      <select id="selUnits">
+        <option value="ftin">Feet &amp; Inches (8'-6 1/2&quot;)</option>
+        <option value="inches">Decimal Inches (102.5&quot;)</option>
+      </select>
+    </label>
+  </div>
+
+  <div id="projectName" class="project-name" contenteditable="true" spellcheck="false">Untitled Wall</div>
+</header>
+
+<main class="layout no-print">
+  <!-- LEFT: wall + opening properties -->
+  <aside class="panel left">
+    <section class="group">
+      <h3 data-collapse="grpWall">Wall</h3>
+      <div class="group-body" id="grpWall">
+        <div class="row">
+          <label>Length</label>
+          <input id="wLength" class="measure" value="16' 0&quot;">
+        </div>
+        <div class="row">
+          <label>Height</label>
+          <input id="wHeight" class="measure" value="8' 1 1/8&quot;">
+        </div>
+        <div class="row">
+          <label>Stud Preset</label>
+          <select id="selFramingPreset"></select>
+        </div>
+        <div class="row">
+          <label>Stud Size</label>
+          <select id="selStud">
+            <option value="2x4">2x4 (1.5&quot; × 3.5&quot;)</option>
+            <option value="2x6">2x6 (1.5&quot; × 5.5&quot;)</option>
+            <option value="2x8">2x8 (1.5&quot; × 7.25&quot;)</option>
+          </select>
+        </div>
+        <div class="row">
+          <label>Spacing O.C.</label>
+          <select id="selSpacing">
+            <option value="12">12&quot;</option>
+            <option value="16" selected>16&quot;</option>
+            <option value="19.2">19.2&quot;</option>
+            <option value="24">24&quot;</option>
+          </select>
+        </div>
+
+        <h4 class="subhead" data-collapse="grpPlates" data-default="collapsed">Plates &amp; Clearance</h4>
+        <div class="group-body" id="grpPlates">
+          <div class="row">
+            <label>Top Plates</label>
+            <select id="selTopPlates"><option>1</option><option selected>2</option></select>
+          </div>
+          <div class="row">
+            <label>Bottom Plates</label>
+            <select id="selBottomPlates"><option selected>1</option><option>2</option></select>
+          </div>
+          <div class="row">
+            <label>Side Clearance</label>
+            <input id="sideClearance" class="measure" value="1/2&quot;" title="Extra space added to each side of rough opening">
+          </div>
+        </div>
+
+        <h4 class="subhead" data-collapse="grpRoof" data-auto-collapse="flat">Roof</h4>
+        <div class="group-body" id="grpRoof">
+          <div class="row">
+            <label>Roof Shape</label>
+            <select id="selRoofStyle">
+              <option value="flat" selected>Flat</option>
+              <option value="slope">Single Slope</option>
+            </select>
+          </div>
+          <div class="row roof-row hidden" id="rowRoofPitch">
+            <label>Pitch</label>
+            <input id="roofPitch" class="measure" value="4&quot;" title="Rise per 12 inches of run">
+          </div>
+          <div class="row roof-row hidden" id="rowRoofHighSide">
+            <label>High Side</label>
+            <select id="selRoofHighSide">
+              <option value="left">Left</option>
+              <option value="right" selected>Right</option>
+            </select>
+          </div>
+          <div class="row roof-row hidden" id="rowRoofOvLow">
+            <label>Eave Overhang</label>
+            <input id="roofOvLow" class="measure" value="12&quot;" title="Overhang at the low (eave) end">
+          </div>
+          <div class="row roof-row hidden" id="rowRoofOvHigh">
+            <label>Ridge Overhang</label>
+            <input id="roofOvHigh" class="measure" value="6&quot;" title="Overhang at the high (ridge) end">
+          </div>
+          <div class="row roof-row hidden" id="rowRoofRafter">
+            <label>Rafter Size</label>
+            <select id="selRoofRafter">
+              <option value="2x6">2x6</option>
+              <option value="2x8">2x8</option>
+              <option value="2x10">2x10</option>
+              <option value="2x12">2x12</option>
+            </select>
+          </div>
+          <div class="row roof-row hidden" id="rowRoofFascia">
+            <label>Fascia</label>
+            <select id="selRoofFascia">
+              <option value="1x6">1x6</option>
+              <option value="1x8">1x8</option>
+              <option value="2x6">2x6</option>
+              <option value="2x8">2x8</option>
+            </select>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="group">
+      <h3 data-collapse="grpAddOpening">Add Opening</h3>
+      <div class="group-body" id="grpAddOpening">
+        <div class="row">
+          <label>Template</label>
+          <select id="selOpeningPreset"></select>
+        </div>
+        <div class="btn-row">
+          <button id="btnAddFromPreset" class="btn primary">Add From Template</button>
+        </div>
+        <div class="btn-row">
+          <button id="btnAddDoor" class="btn">+ Door</button>
+          <button id="btnAddWindow" class="btn">+ Window</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="group" id="selGroup">
+      <h3 data-collapse="grpSelected">Selected Opening</h3>
+      <div class="group-body" id="grpSelected">
+        <div id="noSel" class="muted">Click an opening on the wall to edit it.</div>
+        <div id="selEditor" class="hidden">
+          <div class="row">
+            <label>Type</label>
+            <select id="selType"><option value="door">Door</option><option value="window">Window</option></select>
+          </div>
+          <div class="row">
+            <label>From Left</label>
+            <input id="selLeft" class="measure">
+          </div>
+          <div class="row">
+            <label>Rough Width</label>
+            <input id="selWidth" class="measure">
+          </div>
+          <div class="row">
+            <label>Rough Height</label>
+            <input id="selHeight" class="measure">
+          </div>
+
+          <h4 class="subhead" data-collapse="grpOpAdv" data-default="collapsed">Advanced</h4>
+          <div class="group-body" id="grpOpAdv">
+            <div class="row">
+              <label>Head Height</label>
+              <input id="selHead" class="measure" title="Top of rough opening AFO (above finished floor)">
+            </div>
+            <div class="row" id="rowSill">
+              <label>Sill Height</label>
+              <input id="selSill" class="measure" title="Bottom of rough opening AFO">
+            </div>
+            <div class="row">
+              <label>Header Depth</label>
+              <input id="selHeader" class="measure">
+            </div>
+          </div>
+
+          <div class="btn-row">
+            <button id="btnDelOpening" class="btn danger">Delete Opening</button>
+          </div>
+          <div id="rowFitRoof" class="fit-roof-banner hidden">
+            <div class="fit-roof-msg">⚠ Header extends above the sloped roof line.</div>
+            <button id="btnFitToRoof" class="btn primary">Move to nearest fit</button>
+          </div>
+        </div>
+      </div>
+    </section>
+  </aside>
+
+  <!-- CENTER: canvas -->
+  <section class="canvas-wrap">
+    <div class="wall-tabs-bar">
+      <div id="wallTabs" class="wall-tabs"></div>
+      <button id="btnAddWall" class="btn" title="Add a new wall to this project">+ Wall</button>
+      <button id="btnDupWall" class="btn" title="Duplicate the active wall">Duplicate</button>
+      <button id="btnDelWall" class="btn danger" title="Delete the active wall">Delete Wall</button>
+      <span class="sep"></span>
+      <button id="btnShowPlan" class="btn" title="Open overhead plan view">Plan View</button>
+    </div>
+    <div class="canvas-header">
+      <div id="statusLine" class="status">—</div>
+      <div class="view-controls">
+        <label><input type="checkbox" id="cbShowDims" checked> Dimensions</label>
+        <label><input type="checkbox" id="cbShowLabels" checked> Labels</label>
+        <label><input type="checkbox" id="cbShowGrid"> Grid</label>
+        <label><input type="checkbox" id="cbColorCode" checked> Color Code</label>
+      </div>
+    </div>
+    <div id="canvasScroll" class="canvas-scroll">
+      <canvas id="wallCanvas" width="1400" height="700"></canvas>
+    </div>
+    <div class="zoom-bar">
+      <button class="btn" id="btnZoomOut">−</button>
+      <input id="rngZoom" type="range" min="20" max="200" value="60">
+      <button class="btn" id="btnZoomIn">+</button>
+      <span id="zoomLabel">60%</span>
+      <span class="sep"></span>
+      <button class="btn" id="btnFit">Fit</button>
+    </div>
+  </section>
+
+  <!-- RIGHT: schedule/summary -->
+  <aside class="panel right">
+    <section class="group">
+      <h3 data-collapse="grpSummary">Summary</h3>
+      <div class="group-body" id="grpSummary">
+        <div id="summary" class="summary">—</div>
+      </div>
+    </section>
+    <section class="group">
+      <h3 data-collapse="grpCutList">Cut List</h3>
+      <div class="group-body" id="grpCutList">
+        <table id="cutList" class="cutlist"><thead>
+          <tr><th>Part</th><th>Size</th><th>Length</th><th>Qty</th></tr>
+        </thead><tbody></tbody></table>
+      </div>
+    </section>
+    <section class="group">
+      <h3 data-collapse="grpCost" data-default="collapsed">Cost &amp; Materials</h3>
+      <div class="group-body" id="grpCost">
+        <table id="costTable" class="cutlist">
+          <thead><tr><th>Item</th><th>Qty</th><th>Unit</th><th>Cost</th></tr></thead>
+          <tbody></tbody>
+          <tfoot><tr><th colspan="3" style="text-align:right">Total</th><th id="costTotal">—</th></tr></tfoot>
+        </table>
+        <div class="btn-row">
+          <button id="btnEditPrices" class="btn" type="button">Edit Prices…</button>
+        </div>
+      </div>
+    </section>
+    <section class="group">
+      <h3 data-collapse="grpAdvisory">Advisory</h3>
+      <div class="group-body" id="grpAdvisory">
+        <ul id="advisoryList" class="warnings"></ul>
+        <div class="muted" style="font-size:11px;">
+          Advisory checks cover header span (prescriptive), egress (IRC R310),
+          and material estimates. Not a substitute for a licensed designer.
+        </div>
+      </div>
+    </section>
+    <section class="group">
+      <h3 data-collapse="grpWarnings">Warnings</h3>
+      <div class="group-body" id="grpWarnings">
+        <ul id="warnList" class="warnings"></ul>
+      </div>
+    </section>
+  </aside>
+</main>
+
+<!-- PRINT VIEW (populated when printing) -->
+<section id="printSheet" class="print-only">
+  <header class="print-header">
+    <div class="print-title" id="printTitle">Wall Framing Plan</div>
+    <div class="print-meta" id="printMeta"></div>
+  </header>
+  <div class="print-canvas-wrap">
+    <canvas id="printCanvas"></canvas>
+  </div>
+  <section class="print-tables">
+    <div>
+      <h4>Summary</h4>
+      <div id="printSummary"></div>
+    </div>
+    <div>
+      <h4>Cut List</h4>
+      <table id="printCutList"><thead>
+        <tr><th>Part</th><th>Size</th><th>Length</th><th>Qty</th></tr>
+      </thead><tbody></tbody></table>
+    </div>
+  </section>
+</section>
+
+<!-- MODALS -->
+<div id="modalOpen" class="modal hidden no-print">
+  <div class="modal-card">
+    <div class="modal-head">Open Project <button class="x" data-close>×</button></div>
+    <div class="modal-body"><ul id="projectList" class="proj-list"></ul></div>
+  </div>
+</div>
+
+<div id="modalCalc" class="modal hidden no-print">
+  <div class="modal-card calc-card">
+    <div class="modal-head">Ft / In Calculator <button class="x" data-close>×</button></div>
+    <div class="modal-body">
+      <div class="calc-display">
+        <input id="calcA" class="measure" placeholder="e.g. 8' 6 1/2&quot;">
+        <select id="calcOp">
+          <option value="+">+</option>
+          <option value="-">−</option>
+          <option value="*">×</option>
+          <option value="/">÷</option>
+        </select>
+        <input id="calcB" class="measure" placeholder="e.g. 3' 4&quot;">
+        <button id="calcEq" class="btn primary">=</button>
+      </div>
+      <div class="calc-result">
+        <div>Result:</div>
+        <div id="calcResultFtIn" class="big">—</div>
+        <div id="calcResultIn" class="muted">—</div>
+      </div>
+      <div class="calc-help muted">
+        Accepts: <code>8'</code>, <code>8' 6&quot;</code>, <code>8' 6 1/2&quot;</code>,
+        <code>8-6</code>, <code>102.5</code>, <code>102 1/2&quot;</code>, etc.
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="modalPrices" class="modal hidden no-print">
+  <div class="modal-card">
+    <div class="modal-head">Unit Prices <button class="x" data-close>×</button></div>
+    <div class="modal-body">
+      <div class="muted" style="font-size:12px;margin-bottom:6px">
+        Adjust per-unit prices used for Cost &amp; Materials. Lumber is per
+        lineal foot; sheathing and drywall are per 4×8 panel.
+      </div>
+      <div id="pricesGrid" class="prices-grid"></div>
+      <div class="btn-row" style="margin-top:10px">
+        <button id="btnResetPrices" class="btn">Reset to Defaults</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="modalPlan" class="modal modal-wide hidden no-print">
+  <div class="modal-card plan-card">
+    <div class="modal-head">
+      Overhead Plan View
+      <div class="plan-toolbar">
+        <label><input type="checkbox" id="cbPlanSnap" checked> Snap 1"</label>
+        <label><input type="checkbox" id="cbPlanDims" checked> Measurements</label>
+        <label><input type="checkbox" id="cbPlanCL" checked> C/L Dims</label>
+        <button id="btnPlanAutoArrange" class="btn">Auto Arrange (Rect)</button>
+        <button id="btnPlanExportSvg" class="btn">Export SVG</button>
+        <button id="btnPlanPrint" class="btn">Print Plan</button>
+        <button class="x" data-close>×</button>
+      </div>
+    </div>
+    <div class="modal-body plan-body">
+      <div class="plan-side">
+        <h4>Walls in Project</h4>
+        <ul id="planWallList" class="plan-wall-list"></ul>
+        <div class="muted" style="font-size:11px;line-height:1.4;">
+          Drag walls to move.  Hold <b>Shift</b> to rotate around the wall's
+          center in 15° increments.  Endpoints snap to neighboring walls
+          (green marker shows the snap target).  Double-click a wall to
+          edit it in the elevation view.
+        </div>
+      </div>
+      <div class="plan-canvas-wrap">
+        <canvas id="planCanvas" width="900" height="600"></canvas>
+        <div class="plan-zoom-bar">
+          <button class="btn" id="btnPlanZoomOut">−</button>
+          <input id="rngPlanZoom" type="range" min="10" max="200" value="40">
+          <button class="btn" id="btnPlanZoomIn">+</button>
+          <span id="planZoomLabel">40%</span>
+          <button class="btn" id="btnPlanFit">Fit</button>
+          <span class="sep"></span>
+          <span id="planStatus" class="muted"></span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Scripts (load order matters) -->
+<script src="/static/js/units.js"></script>
+<script src="/static/js/calculator.js"></script>
+<script src="/static/js/framing.js"></script>
+<script src="/static/js/dimensions.js"></script>
+<script src="/static/js/canvas.js"></script>
+<script src="/static/js/corners.js"></script>
+<script src="/static/js/plan.js"></script>
+<script src="/static/js/svg_export.js"></script>
+<script src="/static/js/api.js"></script>
+<script src="/static/js/state.js"></script>
+<script src="/static/js/advisor.js"></script>
+<script src="/static/js/app.js"></script>
+</body>
+</html>

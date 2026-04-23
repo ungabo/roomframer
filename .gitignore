@@ -1,0 +1,5 @@
+# Local environment files
+.env
+.env.local
+data/
+frontend/plan_export_test.svg

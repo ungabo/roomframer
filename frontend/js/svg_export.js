@@ -164,9 +164,9 @@
     const showCenterlineDims = !!(global.PlanView && global.PlanView.showCenterlineDims);
     const corners = (typeof global.Corners !== "undefined")
       ? global.Corners.analyze(state)
-      : walls.map(() => ({ startInset: 0, endInset: 0, startContains: false, endContains: false, startNeighborDepth: 0, endNeighborDepth: 0 }));
+      : walls.map(() => ({ intersectionStudsAt: [] }));
 
-    // ── Bounding box (account for wall depth + any corner-post extension) ──
+    // ── Bounding box (walls draw at exactly their entered length) ──
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
     const segs = walls.map((w, i) => {
       const len   = w.wall.lengthIn;
@@ -177,17 +177,12 @@
       const x0 = w.plan.x, y0 = w.plan.y;
       const x1 = x0 + len * Math.cos(rad);
       const y1 = y0 + len * Math.sin(rad);
-      const c = corners[i] || { startInset: 0, endInset: 0 };
-      // Wall extent along its axis including corner-post extensions
-      const axStartX = x0 + c.startInset        * Math.cos(rad);
-      const axStartY = y0 + c.startInset        * Math.sin(rad);
-      const axEndX   = x0 + (len - c.endInset)  * Math.cos(rad);
-      const axEndY   = y0 + (len - c.endInset)  * Math.sin(rad);
+      const c = corners[i] || { intersectionStudsAt: [] };
       const nx = -Math.sin(rad) * depth / 2;
       const ny =  Math.cos(rad) * depth / 2;
       for (const [cx, cy] of [
-        [axStartX + nx, axStartY + ny], [axStartX - nx, axStartY - ny],
-        [axEndX   + nx, axEndY   + ny], [axEndX   - nx, axEndY   - ny],
+        [x0 + nx, y0 + ny], [x0 - nx, y0 - ny],
+        [x1 + nx, y1 + ny], [x1 - nx, y1 - ny],
       ]) {
         minX = Math.min(minX, cx); minY = Math.min(minY, cy);
         maxX = Math.max(maxX, cx); maxY = Math.max(maxY, cy);
@@ -229,8 +224,8 @@
       const sx = tx(seg.x0);
       const sy = ty(seg.y0);
       const c  = seg.corner;
-      const pxLocalStart = c.startInset        * px;
-      const pxLocalEnd   = (seg.len - c.endInset) * px;
+      const pxLocalStart = 0;
+      const pxLocalEnd   = seg.len * px;
       const pxRectW      = pxLocalEnd - pxLocalStart;
 
       const openings = (seg.w.openings || [])
@@ -250,30 +245,35 @@
       // ── 1. Wall cavity fill ──────────────────────────────────────────────
       out.push(`<rect x="${r(pxLocalStart)}" y="${r(-halfPx)}" width="${r(pxRectW)}" height="${r(depth * px)}" fill="#ede8e0"/>`);
 
-      // ── 1b. Corner posts at ends this wall "contains" ────────────────────
-      const postColor = "#c8845a";
-      if (c.startContains) {
-        const w = (c.startNeighborDepth / 2) * px;
-        out.push(`<rect x="${r(pxLocalStart)}" y="${r(-halfPx)}" width="${r(w)}" height="${r(depth * px)}" fill="${postColor}" stroke="rgba(0,0,0,0.25)" stroke-width="0.4"/>`);
-      }
-      if (c.endContains) {
-        const w = (c.endNeighborDepth / 2) * px;
-        out.push(`<rect x="${r(pxLocalEnd - w)}" y="${r(-halfPx)}" width="${r(w)}" height="${r(depth * px)}" fill="${postColor}" stroke="rgba(0,0,0,0.25)" stroke-width="0.4"/>`);
-      }
-
       // ── 2. Studs in section ──────────────────────────────────────────────
       if (typeof Framing !== "undefined") {
         const fr = Framing.compute({ wall: seg.w.wall, openings: seg.w.openings || [] });
         for (const m of fr.members) {
           if (m.ghost) continue;
           if (!["stud","king","jack","cripple_above","cripple_below"].includes(m.kind)) continue;
-          // Suppress end studs that butt into a neighbor — neighbor's post takes over
-          if (c.startInset > 0 && m.x < c.startInset - 0.01) continue;
-          if (c.endInset   > 0 && m.x + (m.w || 1.5) > seg.len - c.endInset + 0.01) continue;
           const mx   = r(m.x * px);
           const mw   = r((m.w || 1.5) * px);
           const fill = m.kind === "king" ? "#c8845a" : m.kind === "jack" ? "#d49060" : "#b0a898";
           out.push(`<rect x="${mx}" y="${r(-halfPx)}" width="${mw}" height="${r(depth * px)}" fill="${fill}" stroke="rgba(0,0,0,0.2)" stroke-width="0.4"/>`);
+        }
+      }
+
+      // ── 2b. Intersection stud pairs (where another wall end meets this face) ─
+      const studW = (seg.w.wall.studThickIn || 1.5) * px;
+      const studThickIn = seg.w.wall.studThickIn || 1.5;
+      for (const tAlong of (c.intersectionStudsAt || [])) {
+        const cx = tAlong * seg.len * px;
+        const distFromStart = tAlong * seg.len;
+        const distFromEnd   = (1 - tAlong) * seg.len;
+        const cornerZone = studThickIn + 0.5;
+        let offsets;
+        if (distFromStart < cornerZone)    offsets = [studW];
+        else if (distFromEnd < cornerZone) offsets = [-2 * studW];
+        else                               offsets = [-studW, 0];
+        for (const off of offsets) {
+          const rx = cx + off;
+          if (rx < pxLocalStart - 0.5 || rx + studW > pxLocalEnd + 0.5) continue;
+          out.push(`<rect x="${r(rx)}" y="${r(-halfPx)}" width="${r(studW)}" height="${r(depth * px)}" fill="#c8845a" stroke="rgba(0,0,0,0.2)" stroke-width="0.4"/>`);
         }
       }
 

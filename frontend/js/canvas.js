@@ -75,6 +75,7 @@
     const mode = s.unitsMode;
     const framing = Framing.compute({ wall: s.wall, openings: s.openings });
     this._computed = framing;
+    const openingViewImage = getOpeningViewImage(this, s);
 
     const px = this._pxScale;
     const wallWpx = s.wall.lengthIn * px;
@@ -103,6 +104,7 @@
     const wallRightPx  = wallLeftPx + wallWpx;
     const wallTopPx    = MARGIN_TOP + topExtraPx;
     const wallBotPx    = wallTopPx + wallHpx;
+    const wallViewFrame = { x: wallLeftPx, y: wallTopPx, w: wallWpx, h: wallHpx };
 
     // Draw wall outline
     ctx.strokeStyle = "#222";
@@ -124,17 +126,17 @@
     // Inside-wall members (clipped to wall shape)
     ctx.save();
     clipToWallShape(ctx, framing.meta, wallLeftPx, wallBotPx, px);
-    drawMembers(ctx, byKind(["bottom_plate","top_plate","top_plate_slope"]), wallToPx, s);
-    drawMembers(ctx, byKind(["window_ghost","door_ghost"]), wallToPx, s);
-    drawMembers(ctx, byKind(["stud","king","jack","cripple_above","cripple_below","sill","header","rafter_mark"]), wallToPx, s);
-    drawOpeningOutlines(ctx, framing.members, wallToPx, mode, s);
+    drawMembers(ctx, byKind(["bottom_plate","top_plate","top_plate_slope"]), wallToPx, s, false);
+    drawMembers(ctx, byKind(["window_ghost","door_ghost","buck_ghost"]), wallToPx, s, !!openingViewImage);
+    drawMembers(ctx, byKind(["stud","king","jack","cripple_above","cripple_below","sill","header","rafter_mark"]), wallToPx, s, false);
+    drawOpeningOutlines(ctx, framing.members, wallToPx, mode, s, openingViewImage, wallViewFrame, s.wall.viewImageOffsetY || 0);
     ctx.restore();
 
     // Roof members (rafter, birdsmouth, fascia) render OUTSIDE the wall clip
     // so overhangs and the sloped rafter above the top plate are visible.
-    drawMembers(ctx, byKind(["rafter"]), wallToPx, s);
-    drawMembers(ctx, byKind(["fascia"]), wallToPx, s);
-    drawMembers(ctx, byKind(["birdsmouth"]), wallToPx, s);
+    drawMembers(ctx, byKind(["rafter"]), wallToPx, s, false);
+    drawMembers(ctx, byKind(["fascia"]), wallToPx, s, false);
+    drawMembers(ctx, byKind(["birdsmouth"]), wallToPx, s, false);
 
     // Dimensions
     if (s.showDims) {
@@ -158,8 +160,11 @@
     ctx.restore();
   }
 
-  function drawMembers(ctx, members, wallToPx, s) {
+  function drawMembers(ctx, members, wallToPx, s, hideOpeningGhostFill) {
     for (const m of members) {
+      if (hideOpeningGhostFill && m.ghost && (m.kind === "window_ghost" || m.kind === "door_ghost" || m.kind === "buck_ghost")) {
+        continue;
+      }
       if (m.points) {
         drawPolygonMember(ctx, m, wallToPx, s);
         continue;
@@ -192,6 +197,17 @@
   }
 
   function drawWallOutline(ctx, meta, wallLeftPx, wallTopPx, wallBotPx, px) {
+    if (meta.roofStyle === "none") {
+      // Open top — draw three sides only
+      const wallRightPx = wallLeftPx + meta.W * px;
+      ctx.beginPath();
+      ctx.moveTo(wallLeftPx + 0.5, wallTopPx + 0.5);
+      ctx.lineTo(wallLeftPx + 0.5, wallBotPx + 0.5);
+      ctx.lineTo(wallRightPx + 0.5, wallBotPx + 0.5);
+      ctx.lineTo(wallRightPx + 0.5, wallTopPx + 0.5);
+      ctx.stroke();
+      return;
+    }
     if (meta.roofStyle !== "slope") {
       ctx.strokeRect(wallLeftPx + 0.5, wallTopPx + 0.5, meta.W * px, meta.H * px);
       return;
@@ -231,24 +247,38 @@
     ctx.clip();
   }
 
-  function drawOpeningOutlines(ctx, members, wallToPx, mode, s) {
+  function drawOpeningOutlines(ctx, members, wallToPx, mode, s, openingViewImage, wallViewFrame, viewOffsetY) {
     // For each opening ghost, draw "DOOR"/"WINDOW" + dimensions inside if room.
-    const ghosts = members.filter(m => m.ghost && (m.kind === "door_ghost" || m.kind === "window_ghost"));
+    const ghosts = members.filter(m => m.ghost && (m.kind === "door_ghost" || m.kind === "window_ghost" || m.kind === "buck_ghost"));
     ctx.save();
     ctx.font = "12px system-ui, Arial, sans-serif";
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
     for (const g of ghosts) {
       const r = wallToPx(g.x, g.y, g.w, g.h);
+      if (openingViewImage && g.kind !== "buck_ghost") {
+        drawOpeningViewImage(ctx, openingViewImage, r, g.kind, wallViewFrame, viewOffsetY);
+      }
       // Check if this opening violates roof slope (header above roof line).
       const op = (s.openings || []).find(o => o.id === g.oid);
       const violates = op && !openingLeftIsValid(op.leftIn, op, s.wall);
       // emphasized outline
       ctx.strokeStyle = violates
         ? "#d33"
-        : (g.kind === "door_ghost" ? "#555" : "#2a77c9");
+        : (g.kind === "door_ghost" ? "#555" : g.kind === "buck_ghost" ? "#c87a00" : "#2a77c9");
       ctx.lineWidth = violates ? 2.4 : 1.6;
       ctx.strokeRect(r.x + 0.5, r.y + 0.5, r.w - 1, r.h - 1);
+      // Buck: draw an X crosshatch to indicate open rough frame
+      if (g.kind === "buck_ghost" && !violates) {
+        ctx.save();
+        ctx.strokeStyle = "rgba(200,122,0,0.35)";
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(r.x, r.y); ctx.lineTo(r.x + r.w, r.y + r.h);
+        ctx.moveTo(r.x + r.w, r.y); ctx.lineTo(r.x, r.y + r.h);
+        ctx.stroke();
+        ctx.restore();
+      }
       if (violates) {
         ctx.save();
         ctx.fillStyle = "rgba(220,55,55,0.12)";
@@ -261,7 +291,7 @@
       // Label
       if (s.showLabels && r.h > 28) {
         ctx.fillStyle = "#333";
-        const kindLabel = g.kind === "door_ghost" ? "DOOR" : "WINDOW";
+        const kindLabel = g.kind === "door_ghost" ? "DOOR" : g.kind === "buck_ghost" ? "BUCK" : "WINDOW";
         ctx.fillText(kindLabel, r.x + r.w / 2, r.y + 14);
         if (r.h > 48) {
           const sizeLabel = Units.formatShort(g.w, mode) + " × " + Units.formatShort(g.h, mode);
@@ -270,6 +300,89 @@
       }
     }
     ctx.restore();
+  }
+
+  function drawOpeningViewImage(ctx, img, r, kind, wallViewFrame, viewOffsetY) {
+    if (!img || !img.naturalWidth || !img.naturalHeight || r.w <= 0 || r.h <= 0) return;
+    if (!wallViewFrame || wallViewFrame.w <= 0 || wallViewFrame.h <= 0) return;
+    const imgAspect = img.naturalWidth / img.naturalHeight;
+    const frameAspect = wallViewFrame.w / wallViewFrame.h;
+    let sx = 0;
+    let sy = 0;
+    let sw = img.naturalWidth;
+    let sh = img.naturalHeight;
+
+    // Cover crop once to the whole wall frame, then each opening samples
+    // its own region of that shared "outside scene".
+    if (imgAspect > frameAspect) {
+      sw = Math.max(1, Math.round(sh * frameAspect));
+      sx = Math.round((img.naturalWidth - sw) / 2);
+    } else {
+      sh = Math.max(1, Math.round(sw / frameAspect));
+      sy = Math.round((img.naturalHeight - sh) / 2);
+    }
+
+    // Pan the crop window vertically through the source image so Y-shift
+    // reveals more above/below, rather than shifting the projected plane.
+    const offsetN = Math.max(-1, Math.min(1, (viewOffsetY || 0) / 100));
+    const availablePanY = Math.max(0, img.naturalHeight - sh);
+    let sceneYOffsetPx = 0;
+    if (availablePanY > 0) {
+      const centerSy = Math.round((img.naturalHeight - sh) / 2);
+      const panSy = Math.round(centerSy + offsetN * (availablePanY / 2));
+      sy = Math.max(0, Math.min(availablePanY, panSy));
+    } else {
+      // If no vertical source pan room exists (very wide image), still move
+      // the shared scene globally so the control always has visible effect.
+      sceneYOffsetPx = -offsetN * wallViewFrame.h * 0.35;
+    }
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(r.x, r.y, r.w, r.h);
+    ctx.clip();
+    ctx.globalAlpha = 0.6;
+    ctx.drawImage(
+      img,
+      sx,
+      sy,
+      sw,
+      sh,
+      wallViewFrame.x,
+      wallViewFrame.y + sceneYOffsetPx,
+      wallViewFrame.w,
+      wallViewFrame.h
+    );
+    ctx.globalAlpha = 1;
+    if (kind === "window_ghost") {
+      ctx.fillStyle = "rgba(190,220,255,0.16)";
+      ctx.fillRect(r.x, r.y, r.w, r.h);
+    }
+    ctx.restore();
+  }
+
+  function getOpeningViewImage(self, s) {
+    const dataUrl = s && s.wall ? s.wall.viewImageDataUrl : null;
+    if (!dataUrl) {
+      self._openingViewImage = null;
+      self._openingViewImageUrl = null;
+      return null;
+    }
+    if (self._openingViewImageUrl !== dataUrl) {
+      const img = new Image();
+      self._openingViewImage = null;
+      self._openingViewImageUrl = dataUrl;
+      img.onload = () => {
+        self._openingViewImage = img;
+        self.render();
+      };
+      img.onerror = () => {
+        self._openingViewImage = null;
+      };
+      img.src = dataUrl;
+      return null;
+    }
+    return self._openingViewImage;
   }
 
   function drawTitleBlock(ctx, s, framing, wallLeftPx, wallTopPx, wallWpx) {
@@ -457,6 +570,16 @@
   // ---------- interaction ----------
   function bindEvents(self) {
     const canvas = self._canvas;
+    const SNAP_SILL_IN = 1;
+    const DRAG_LOCK_THRESHOLD_IN = 1;
+
+    const endDrag = () => {
+      if (self._dragging) {
+        self._cb.onOpeningChanged(self._dragging.idx, true);
+      }
+      self._dragging = null;
+      canvas.style.cursor = "default";
+    };
 
     const toWall = (evt) => {
       const rect = canvas.getBoundingClientRect();
@@ -481,6 +604,10 @@
     };
 
     canvas.addEventListener("mousemove", (e) => {
+      if (self._dragging && (e.buttons & 1) !== 1) {
+        endDrag();
+        return;
+      }
       const p = toWall(e);
       const s = self._state();
       self._cb.onStatus(
@@ -488,27 +615,55 @@
         `y: ${Units.formatShort(clamp(p.wy, 0, s.wall.heightIn), s.unitsMode)}`
       );
       if (self._dragging) {
+        e.preventDefault();
         const drag = self._dragging;
-        let newLeft = drag.origLeft + (p.wx - drag.startWx);
-        // snap to 1/16"
-        newLeft = Math.round(newLeft * 16) / 16;
-        // clamp inside wall
         const o = s.openings[drag.idx];
-        newLeft = Math.max(0, Math.min(s.wall.lengthIn - o.widthIn, newLeft));
-        const rawCandidate = newLeft;
-        newLeft = findNearestValidOpeningLeft(newLeft, o, s.wall, drag.origLeft);
-        const wasBlocked = s.wall.roofStyle === "slope"
-          && !openingLeftIsValid(rawCandidate, o, s.wall);
-        if (wasBlocked) {
-          canvas.style.cursor = "not-allowed";
-          self._cb.onStatus(
-            `Blocked by roof slope — header would exceed roof line. ` +
-            `Snapped to nearest fit.`
-          );
-        } else {
-          canvas.style.cursor = "grabbing";
+        const dx = p.wx - drag.startWx;
+        const dy = p.wy - drag.startWy;
+
+        if (!drag.axis) {
+          if (o.kind === "window" && Math.abs(dy) >= DRAG_LOCK_THRESHOLD_IN && Math.abs(dy) > Math.abs(dx)) {
+            drag.axis = "y";
+          } else if (Math.abs(dx) >= DRAG_LOCK_THRESHOLD_IN) {
+            drag.axis = "x";
+          }
         }
-        o.leftIn = newLeft;
+
+        if (drag.axis === "y" && o.kind === "window") {
+          let newSill = drag.origSill + dy;
+          newSill = Math.round(newSill * 16) / 16;
+          newSill = clampWindowSill(newSill, o, s.wall);
+          const snapSill = getDefaultWindowSill(o);
+          if (Math.abs(newSill - snapSill) <= SNAP_SILL_IN) newSill = snapSill;
+          o.sillHeightIn = newSill;
+          o.headHeightIn = newSill + o.heightIn;
+          canvas.style.cursor = "ns-resize";
+          self._cb.onStatus(
+            `Window sill: ${Units.formatShort(newSill, s.unitsMode)}` +
+            (Math.abs(newSill - snapSill) < 1e-6 ? "  (default)" : "")
+          );
+        } else if (drag.axis === "x" || o.kind !== "window") {
+          let newLeft = drag.origLeft + dx;
+          newLeft = Math.round(newLeft * 16) / 16;
+          newLeft = Math.max(0, Math.min(s.wall.lengthIn - o.widthIn, newLeft));
+          const rawCandidate = newLeft;
+          newLeft = findNearestValidOpeningLeft(newLeft, o, s.wall, drag.origLeft);
+          const wasBlocked = s.wall.roofStyle === "slope"
+            && !openingLeftIsValid(rawCandidate, o, s.wall);
+          if (wasBlocked) {
+            canvas.style.cursor = "not-allowed";
+            self._cb.onStatus(
+              `Blocked by roof slope — header would exceed roof line. ` +
+              `Snapped to nearest fit.`
+            );
+          } else {
+            canvas.style.cursor = "grabbing";
+          }
+          o.leftIn = newLeft;
+        } else {
+          canvas.style.cursor = "grab";
+          return;
+        }
         self._cb.onOpeningChanged(drag.idx);
         self.render();
       } else {
@@ -518,22 +673,28 @@
     });
 
     canvas.addEventListener("mousedown", (e) => {
+      if (e.button !== 0) return;
+      e.preventDefault();
       const p = toWall(e);
       const hit = hitOpening(p.wx, p.wy);
       if (hit) {
-        self._dragging = { idx: hit.i, startWx: p.wx, origLeft: hit.o.leftIn };
+        self._dragging = {
+          idx: hit.i,
+          startWx: p.wx,
+          startWy: p.wy,
+          origLeft: hit.o.leftIn,
+          origSill: hit.o.sillHeightIn,
+          axis: null,
+        };
         canvas.style.cursor = "grabbing";
         self._cb.onSelectOpening(hit.i);
       } else {
         self._cb.onSelectOpening(-1);
       }
     });
-    window.addEventListener("mouseup", () => {
-      if (self._dragging) {
-        self._cb.onOpeningChanged(self._dragging.idx, true);
-      }
-      self._dragging = null;
-    });
+    canvas.addEventListener("dragstart", (e) => e.preventDefault());
+    window.addEventListener("mouseup", endDrag);
+    window.addEventListener("blur", endDrag);
   }
 
   function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
@@ -561,6 +722,29 @@
     const headerTop = opening.headHeightIn + opening.headerDepthIn;
     const roofMin = Math.min(roofBottomAtX(kingL, wall), roofBottomAtX(kingR, wall));
     return headerTop <= roofMin + 1e-6;
+  }
+
+  function getDefaultWindowSill(opening) {
+    if (isFinite(opening.defaultSillHeightIn)) return opening.defaultSillHeightIn;
+    return isFinite(opening.sillHeightIn) ? opening.sillHeightIn : 24;
+  }
+
+  function clampWindowSill(sillTop, opening, wall) {
+    const T = wall.studThickIn || 1.5;
+    const botN = Math.max(1, wall.bottomPlates || 1);
+    const minSillTop = botN * T + T;
+    const roofMaxSill = roofMaxWindowSill(opening, wall);
+    const maxSillTop = Math.max(minSillTop, roofMaxSill);
+    return clamp(sillTop, minSillTop, maxSillTop);
+  }
+
+  function roofMaxWindowSill(opening, wall) {
+    const T = wall.studThickIn || 1.5;
+    const SC = Math.max(0, wall.sideClearance || 0);
+    const kingL = opening.leftIn - SC - T * 2;
+    const kingR = opening.leftIn + opening.widthIn + SC + T * 2;
+    const roofMin = Math.min(roofBottomAtX(kingL, wall), roofBottomAtX(kingR, wall));
+    return roofMin - opening.headerDepthIn - opening.heightIn;
   }
 
   function findNearestValidOpeningLeft(candidateLeft, opening, wall, fallbackLeft) {

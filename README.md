@@ -35,7 +35,7 @@ Before you start, make sure you have:
 From the project root:
 
 ```bat
-cd C:\path\to\designer
+cd d:\path\to\designer
 py -m venv .venv
 .venv\Scripts\activate
 python -m pip install --upgrade pip

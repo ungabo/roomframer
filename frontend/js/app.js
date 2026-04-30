@@ -7,6 +7,14 @@
   let framingPresets = [];
   let openingPresets = [];
   let currentUser = null;
+  let autosaveTimer = null;
+  let autosaveIndicatorTimer = null;
+  let suppressAutosave = true;
+  let lastSavedDocJson = null;
+
+  const AUTOSAVE_DELAY_MS = 500;
+  const WALL_IMAGE_MAX_WIDTH = 1200;
+  const WALL_IMAGE_JPEG_QUALITY = 0.4;
 
   // -------------------- Boot --------------------
   window.addEventListener("DOMContentLoaded", async () => {
@@ -37,6 +45,7 @@
     State.onChange(() => {
       updateProjectNameUI();
       updateUnitsModeUI();
+      updateHistoryButtons();
       syncWallInputsFromState();
       populateWallTabs();
       populatePlanWallList();
@@ -44,6 +53,7 @@
       refreshSummary();
       WallView.render();
       if (!$("modalPlan").classList.contains("hidden")) PlanView.render();
+      scheduleAutosave();
     });
 
     bindToolbar();
@@ -51,6 +61,7 @@
     bindViewToggles();
     bindInspector();
     bindKeyboard();
+    bindUnloadWarning();
     bindCollapsibles();
     bindPricesModal();
 
@@ -62,11 +73,27 @@
     populatePresetSelects();
     applyDefaultFramingPresetToActiveWall();
 
+    // Auto-load project from URL ?project=<id>
+    const urlProjectId = new URLSearchParams(window.location.search).get("project");
+    if (urlProjectId) {
+      try {
+        const full = await API.getProject(parseInt(urlProjectId, 10));
+        State.loadDocument(full.data, full);
+        flashStatus(`Opened "${full.name}"`);
+      } catch (e) {
+        console.warn("Could not restore project from URL", e);
+        history.replaceState(null, "", window.location.pathname);
+      }
+    }
+
     // Initial render
     State.replace(State.get());
     WallView.render();
     refreshSummary();
     populateWallTabs();
+    updateHistoryButtons();
+    lastSavedDocJson = State.get().projectId ? serializeDocument() : null;
+    suppressAutosave = false;
 
     // Plan view init
     PlanView.init($("planCanvas"), {
@@ -80,18 +107,22 @@
   function bindToolbar() {
     $("btnNew").onclick = () => {
       if (confirm("Start a new wall? Unsaved changes will be lost.")) {
+        clearPendingAutosave();
         State.reset();
         applyDefaultFramingPresetToActiveWall();
+        lastSavedDocJson = null;
+        history.replaceState(null, "", window.location.pathname);
       }
     };
-    $("btnSave").onclick = saveProject;
+    $("btnSave").onclick = () => saveProject();
     $("btnSaveAs").onclick = async () => {
       const currentName = State.get().projectName || "Untitled Project";
       const nextName = await openSaveAsModal(currentName);
       if (!nextName || !nextName.trim()) return;
+      clearPendingAutosave();
       State.set({ projectName: nextName.trim() });
       State.get().projectId = null; // force create
-      await saveProject(true);
+      await saveProject({ forceNew: true });
     };
     $("btnOpen").onclick = openProjectsModal;
     $("btnLogout").onclick = async () => {
@@ -154,16 +185,18 @@
 
     $("btnAddDoor").onclick = () => addDefaultOpening("door");
     $("btnAddWindow").onclick = () => addDefaultOpening("window");
+    $("btnAddBuck").onclick = () => addDefaultOpening("buck");
     $("btnAddFromPreset").onclick = addFromOpeningPreset;
 
     $("projectName").addEventListener("blur", () => {
-      State.get().projectName = ($("projectName").textContent || "").trim() || "Untitled Wall";
+      const projectName = ($("projectName").textContent || "").trim() || "Untitled Wall";
+      if (projectName !== State.get().projectName) State.setWithHistory({ projectName });
     });
   }
 
   function bindWallInputs() {
     const s = () => State.get();
-    const measureIds = ["wLength","wHeight","roofPitch","sideClearance","roofOvLow","roofOvHigh"];
+    const measureIds = ["wLength","wHeight","roofPitch","sideClearance","roofOvLow","roofOvHigh","windowShimSide","windowShimTop","windowShimBottom"];
     measureIds.forEach(id => Units.wireMeasureInput($(id), () => s().unitsMode));
 
     $("wLength").addEventListener("change", () => {
@@ -177,6 +210,30 @@
     $("sideClearance").addEventListener("change", () => {
       const v = Units.parse($("sideClearance").value); if (!isFinite(v) || v < 0) return;
       State.commit(); s().wall.sideClearance = v; WallView.render(); refreshSummary();
+    });
+    $("windowShimSide").addEventListener("change", () => {
+      const v = Units.parse($("windowShimSide").value); if (!isFinite(v) || v < 0) return;
+      State.commit();
+      s().wall.windowShimSideIn = v;
+      applyUnitSizingToAllWindows(s());
+      WallView.render(); refreshSummary();
+      $("windowShimSide").value = Units.format(s().wall.windowShimSideIn, s().unitsMode);
+    });
+    $("windowShimTop").addEventListener("change", () => {
+      const v = Units.parse($("windowShimTop").value); if (!isFinite(v) || v < 0) return;
+      State.commit();
+      s().wall.windowShimTopIn = v;
+      applyUnitSizingToAllWindows(s());
+      WallView.render(); refreshSummary();
+      $("windowShimTop").value = Units.format(s().wall.windowShimTopIn, s().unitsMode);
+    });
+    $("windowShimBottom").addEventListener("change", () => {
+      const v = Units.parse($("windowShimBottom").value); if (!isFinite(v) || v < 0) return;
+      State.commit();
+      s().wall.windowShimBottomIn = v;
+      applyUnitSizingToAllWindows(s());
+      WallView.render(); refreshSummary();
+      $("windowShimBottom").value = Units.format(s().wall.windowShimBottomIn, s().unitsMode);
     });
     $("roofPitch").addEventListener("change", () => {
       const v = Units.parse($("roofPitch").value); if (!isFinite(v) || v < 0) return;
@@ -196,6 +253,18 @@
     $("selSpacing").onchange = () => {
       const nextSpacing = parseFloat($("selSpacing").value);
       State.commit(); s().wall.spacingOC = nextSpacing;
+      WallView.render(); refreshSummary();
+    };
+    $("cbLoadBearing").onchange = () => {
+      const bearing = $("cbLoadBearing").checked;
+      State.commit();
+      s().wall.loadBearing = bearing;
+      // Re-apply recommended header depths to all existing openings.
+      const openings = s().openings;
+      for (let i = 0; i < openings.length; i++) {
+        const rec = Advisor.recommendedHeaderDepthIn(openings[i].widthIn, bearing);
+        if (rec != null) State.updateOpening(i, { headerDepthIn: rec });
+      }
       WallView.render(); refreshSummary();
     };
     $("selTopPlates").onchange = () => {
@@ -267,13 +336,56 @@
       syncWallInputsFromState();
       WallView.render(); refreshSummary();
     };
+
+    $("inpWallImage").addEventListener("change", async () => {
+      const file = $("inpWallImage").files && $("inpWallImage").files[0];
+      if (!file) return;
+      try {
+        setAutosaveIndicator("Compressing image...", "saving");
+        const dataUrl = await compressImageFile(file, WALL_IMAGE_MAX_WIDTH, WALL_IMAGE_JPEG_QUALITY);
+        State.commit();
+        s().wall.viewImageDataUrl = dataUrl;
+        WallView.render(); refreshSummary();
+        const kb = Math.round((dataUrl.length * 3) / 4 / 1024);
+        setAutosaveIndicator("Image saved to wall", "saved", 1400);
+        flashStatus(`Outside image updated (${kb} KB compressed JPEG).`);
+      } catch (e) {
+        setAutosaveIndicator("Image upload failed", "error", 2200);
+        alert("Image upload failed: " + (e.message || "Unknown error"));
+      } finally {
+        $("inpWallImage").value = "";
+      }
+    });
+
+    $("btnClearWallImage").onclick = () => {
+      if (!s().wall.viewImageDataUrl) return;
+      State.commit();
+      s().wall.viewImageDataUrl = null;
+      WallView.render(); refreshSummary();
+      setAutosaveIndicator("Outside image cleared", "saved", 1200);
+      flashStatus("Outside image removed.");
+    };
+
+    let _imgOffsetCommitTimer = null;
+    $("rngWallImageOffsetY").addEventListener("input", () => {
+      const v = parseInt($("rngWallImageOffsetY").value, 10);
+      if (!isFinite(v)) return;
+      const clamped = Math.max(-100, Math.min(100, v));
+      if (clamped === (s().wall.viewImageOffsetY || 0)) return;
+      // Update live for preview; only push to undo history after 10s of no movement
+      s().wall.viewImageOffsetY = clamped;
+      $("lblWallImageOffsetY").textContent = `${clamped}%`;
+      WallView.render();
+      clearTimeout(_imgOffsetCommitTimer);
+      _imgOffsetCommitTimer = setTimeout(() => State.commit(), 10000);
+    });
   }
 
   function bindViewToggles() {
-    $("cbShowDims").onchange   = () => { State.get().showDims   = $("cbShowDims").checked;   WallView.render(); };
-    $("cbShowLabels").onchange = () => { State.get().showLabels = $("cbShowLabels").checked; WallView.render(); };
-    $("cbShowGrid").onchange   = () => { State.get().showGrid   = $("cbShowGrid").checked;   WallView.render(); };
-    $("cbColorCode").onchange  = () => { State.get().colorCode  = $("cbColorCode").checked;  WallView.render(); };
+    $("cbShowDims").onchange   = () => { State.setWithHistory({ showDims: $("cbShowDims").checked }); };
+    $("cbShowLabels").onchange = () => { State.setWithHistory({ showLabels: $("cbShowLabels").checked }); };
+    $("cbShowGrid").onchange   = () => { State.setWithHistory({ showGrid: $("cbShowGrid").checked }); };
+    $("cbColorCode").onchange  = () => { State.setWithHistory({ colorCode: $("cbColorCode").checked }); };
 
     $("rngZoom").oninput = () => {
       WallView.setZoom(parseInt($("rngZoom").value, 10));
@@ -288,10 +400,31 @@
       $("zoomLabel").textContent = pct + "%";
       WallView.render();
     };
+
+    // Mouse wheel zoom on canvas area
+    $("wallCanvas").addEventListener("wheel", (e) => {
+      e.preventDefault();
+      const scroll = $("canvasScroll");
+      const oldWidth = $("wallCanvas").width;
+      const oldHeight = $("wallCanvas").height;
+      const scrollRect = scroll.getBoundingClientRect();
+      const anchorX = scroll.scrollLeft + (e.clientX - scrollRect.left);
+      const anchorY = scroll.scrollTop + (e.clientY - scrollRect.top);
+      const ratioX = oldWidth ? anchorX / oldWidth : 0;
+      const ratioY = oldHeight ? anchorY / oldHeight : 0;
+      const delta = e.deltaY < 0 ? 10 : -10;
+      const next = Math.min(200, Math.max(20, parseInt($("rngZoom").value, 10) + delta));
+      $("rngZoom").value = next;
+      $("rngZoom").oninput();
+      const newWidth = $("wallCanvas").width;
+      const newHeight = $("wallCanvas").height;
+      scroll.scrollLeft = Math.max(0, ratioX * newWidth - (e.clientX - scrollRect.left));
+      scroll.scrollTop = Math.max(0, ratioY * newHeight - (e.clientY - scrollRect.top));
+    }, { passive: false });
   }
 
   function bindInspector() {
-    const ids = ["selLeft","selWidth","selHeight","selHead","selSill","selHeader"];
+    const ids = ["selLeft","selCenter","selWidth","selHeight","selHead","selSill","selHeader","selUnitWidth","selUnitHeight"];
     ids.forEach(id => Units.wireMeasureInput($(id), () => State.get().unitsMode));
 
     const commitField = (field, elId, validator) => {
@@ -301,22 +434,139 @@
       if (idx < 0) return;
       const s = State.get();
       const original = { ...s.openings[idx] };
-      const candidate = { ...original, [field]: val };
+      const patch = { [field]: val };
+      if (field === "widthIn") {
+        const bearing = !!s.wall.loadBearing;
+        const recHeader = Advisor.recommendedHeaderDepthIn(val, bearing);
+        if (recHeader != null) patch.headerDepthIn = recHeader;
+        if (original.kind === "window") {
+          const dims = unitFromRough(val, original.heightIn, s.wall);
+          patch.windowUnitWidthIn = dims.unitWidthIn;
+        }
+      }
+      if (field === "heightIn") {
+        if (original.kind === "window") {
+          patch.headHeightIn = original.sillHeightIn + val;
+          const dims = unitFromRough(original.widthIn, val, s.wall);
+          patch.windowUnitHeightIn = dims.unitHeightIn;
+        }
+        else patch.headHeightIn = val;
+      } else if (field === "sillHeightIn" && original.kind === "window") {
+        patch.headHeightIn = val + original.heightIn;
+      } else if (field === "headHeightIn") {
+        if (original.kind === "window") patch.heightIn = val - original.sillHeightIn;
+        else patch.heightIn = val;
+      }
+      const candidate = { ...original, ...patch };
+      if (candidate.kind === "window" && candidate.heightIn <= 0) {
+        refreshInspector();
+        return;
+      }
       if (!openingFitsRoof(candidate, s.wall)) {
         alert("That opening setting does not fit under the current roof slope.");
         refreshInspector();
         return;
       }
       State.commit();
-      State.updateOpening(idx, { [field]: val });
+      State.updateOpening(idx, patch);
       WallView.render(); refreshSummary();
     };
     $("selLeft").addEventListener("change",   () => commitField("leftIn",   "selLeft",   v => v >= 0));
+    // Center-line (O.C.) input: converts center → leftIn = center - width/2
+    $("selCenter").addEventListener("change", () => {
+      const center = Units.parse($("selCenter").value);
+      if (!isFinite(center) || center < 0) { refreshInspector(); return; }
+      const idx = State.get().selectedIdx;
+      if (idx < 0) return;
+      const s = State.get();
+      const o = s.openings[idx];
+      const leftIn = center - o.widthIn / 2;
+      if (leftIn < 0) { refreshInspector(); return; }
+      State.commit();
+      State.updateOpening(idx, { leftIn });
+      WallView.render(); refreshSummary();
+    });
     $("selWidth").addEventListener("change",  () => commitField("widthIn",  "selWidth",  v => v >  0));
     $("selHeight").addEventListener("change", () => commitField("heightIn", "selHeight", v => v >  0));
     $("selHead").addEventListener("change",   () => commitField("headHeightIn", "selHead", v => v > 0));
     $("selSill").addEventListener("change",   () => commitField("sillHeightIn", "selSill", v => v >= 0));
     $("selHeader").addEventListener("change", () => commitField("headerDepthIn", "selHeader", v => v > 0));
+
+    const commitUnitField = (field, elId) => {
+      const val = Units.parse($(elId).value);
+      if (!isFinite(val) || val <= 0) return;
+      const idx = State.get().selectedIdx;
+      if (idx < 0) return;
+      const s = State.get();
+      const original = { ...s.openings[idx] };
+      if (original.kind !== "window") return;
+
+      const unitWidthIn = field === "windowUnitWidthIn"
+        ? val
+        : (isFinite(original.windowUnitWidthIn) ? original.windowUnitWidthIn : unitFromRough(original.widthIn, original.heightIn, s.wall).unitWidthIn);
+      const unitHeightIn = field === "windowUnitHeightIn"
+        ? val
+        : (isFinite(original.windowUnitHeightIn) ? original.windowUnitHeightIn : unitFromRough(original.widthIn, original.heightIn, s.wall).unitHeightIn);
+      const ro = roughFromUnit(unitWidthIn, unitHeightIn, s.wall);
+      const bearing = !!s.wall.loadBearing;
+      const recHeader = Advisor.recommendedHeaderDepthIn(ro.widthIn, bearing);
+
+      const patch = {
+        windowUseUnitSizing: true,
+        windowUnitWidthIn: unitWidthIn,
+        windowUnitHeightIn: unitHeightIn,
+        widthIn: ro.widthIn,
+        heightIn: ro.heightIn,
+        headHeightIn: original.sillHeightIn + ro.heightIn,
+      };
+      if (recHeader != null) patch.headerDepthIn = recHeader;
+
+      const candidate = { ...original, ...patch };
+      if (!openingFitsRoof(candidate, s.wall)) {
+        alert("That window unit size does not fit under the current roof slope.");
+        refreshInspector();
+        return;
+      }
+      State.commit();
+      State.updateOpening(idx, patch);
+      WallView.render(); refreshSummary();
+    };
+    $("selUnitWidth").addEventListener("change", () => commitUnitField("windowUnitWidthIn", "selUnitWidth"));
+    $("selUnitHeight").addEventListener("change", () => commitUnitField("windowUnitHeightIn", "selUnitHeight"));
+
+    $("selUseUnitSizing").onchange = () => {
+      const idx = State.get().selectedIdx; if (idx < 0) return;
+      const s = State.get();
+      const original = { ...s.openings[idx] };
+      if (original.kind !== "window") return;
+
+      const useUnitSizing = $("selUseUnitSizing").checked;
+      const currentUnit = unitFromRough(original.widthIn, original.heightIn, s.wall);
+      const unitWidthIn = isFinite(original.windowUnitWidthIn) ? original.windowUnitWidthIn : currentUnit.unitWidthIn;
+      const unitHeightIn = isFinite(original.windowUnitHeightIn) ? original.windowUnitHeightIn : currentUnit.unitHeightIn;
+      const patch = {
+        windowUseUnitSizing: useUnitSizing,
+        windowUnitWidthIn: unitWidthIn,
+        windowUnitHeightIn: unitHeightIn,
+      };
+      if (useUnitSizing) {
+        const ro = roughFromUnit(unitWidthIn, unitHeightIn, s.wall);
+        patch.widthIn = ro.widthIn;
+        patch.heightIn = ro.heightIn;
+        patch.headHeightIn = original.sillHeightIn + ro.heightIn;
+        const recHeader = Advisor.recommendedHeaderDepthIn(ro.widthIn, !!s.wall.loadBearing);
+        if (recHeader != null) patch.headerDepthIn = recHeader;
+      }
+      const candidate = { ...original, ...patch };
+      if (!openingFitsRoof(candidate, s.wall)) {
+        alert("That unit-size configuration does not fit under the current roof slope.");
+        refreshInspector();
+        return;
+      }
+      State.commit();
+      State.updateOpening(idx, patch);
+      WallView.render(); refreshSummary();
+    };
 
     $("selType").onchange = () => {
       const nextType = $("selType").value;
@@ -409,8 +659,15 @@
       heightIn: p.rough_height_in,
       headHeightIn: p.head_height_in,
       sillHeightIn: p.sill_height_in,
-      headerDepthIn: p.header_depth_in,
+      headerDepthIn: Advisor.recommendedHeaderDepthIn(p.rough_width_in, !!(wall.loadBearing)) || p.header_depth_in,
     };
+    if (newOpening.kind === "window") {
+      newOpening.defaultSillHeightIn = newOpening.sillHeightIn;
+      const unit = unitFromRough(newOpening.widthIn, newOpening.heightIn, wall);
+      newOpening.windowUseUnitSizing = false;
+      newOpening.windowUnitWidthIn = unit.unitWidthIn;
+      newOpening.windowUnitHeightIn = unit.unitHeightIn;
+    }
     if (!openingFitsRoof(newOpening, wall)) {
       const adjusted = findValidLeftForOpening(newOpening, wall);
       if (adjusted == null) {
@@ -425,9 +682,11 @@
   }
 
   function addDefaultOpening(kind) {
-    const d = kind === "door"
-      ? { widthIn: 36, heightIn: 80, headHeightIn: 80, sillHeightIn: 0, headerDepthIn: 3.5 }
-      : { widthIn: 36, heightIn: 48, headHeightIn: 72, sillHeightIn: 24, headerDepthIn: 3.5 };
+    const bearing = !!(State.get().wall.loadBearing);
+    const defaultHeaderDepth = Advisor.recommendedHeaderDepthIn(36, bearing) || 3.5;
+    const d = kind === "window"
+      ? { widthIn: 36, heightIn: 48, headHeightIn: 72, sillHeightIn: 24, defaultSillHeightIn: 24, headerDepthIn: defaultHeaderDepth }
+      : { widthIn: 36, heightIn: 80, headHeightIn: 80, sillHeightIn: 0, headerDepthIn: defaultHeaderDepth };
     const left = findOpenSpot(d.widthIn);
     const wall = State.get().wall;
     const newOpening = { kind, leftIn: left, ...d };
@@ -439,7 +698,53 @@
       }
       newOpening.leftIn = adjusted;
     }
+    if (kind === "window") {
+      const unit = unitFromRough(newOpening.widthIn, newOpening.heightIn, wall);
+      newOpening.windowUseUnitSizing = false;
+      newOpening.windowUnitWidthIn = unit.unitWidthIn;
+      newOpening.windowUnitHeightIn = unit.unitHeightIn;
+    }
     State.addOpening(newOpening);
+  }
+
+  function roughFromUnit(unitWidthIn, unitHeightIn, wall) {
+    const side = Math.max(0, wall.windowShimSideIn || 0);
+    const top = Math.max(0, wall.windowShimTopIn || 0);
+    const bottom = Math.max(0, wall.windowShimBottomIn || 0);
+    return {
+      widthIn: Math.max(0, unitWidthIn + side * 2),
+      heightIn: Math.max(0, unitHeightIn + top + bottom),
+    };
+  }
+
+  function unitFromRough(roughWidthIn, roughHeightIn, wall) {
+    const side = Math.max(0, wall.windowShimSideIn || 0);
+    const top = Math.max(0, wall.windowShimTopIn || 0);
+    const bottom = Math.max(0, wall.windowShimBottomIn || 0);
+    return {
+      unitWidthIn: Math.max(0, roughWidthIn - side * 2),
+      unitHeightIn: Math.max(0, roughHeightIn - top - bottom),
+    };
+  }
+
+  function applyUnitSizingToAllWindows(state) {
+    for (let i = 0; i < state.openings.length; i++) {
+      const o = state.openings[i];
+      if (o.kind !== "window" || !o.windowUseUnitSizing) continue;
+      const unitWidthIn = isFinite(o.windowUnitWidthIn) ? o.windowUnitWidthIn : unitFromRough(o.widthIn, o.heightIn, state.wall).unitWidthIn;
+      const unitHeightIn = isFinite(o.windowUnitHeightIn) ? o.windowUnitHeightIn : unitFromRough(o.widthIn, o.heightIn, state.wall).unitHeightIn;
+      const ro = roughFromUnit(unitWidthIn, unitHeightIn, state.wall);
+      const patch = {
+        windowUnitWidthIn: unitWidthIn,
+        windowUnitHeightIn: unitHeightIn,
+        widthIn: ro.widthIn,
+        heightIn: ro.heightIn,
+        headHeightIn: o.sillHeightIn + ro.heightIn,
+      };
+      const recHeader = Advisor.recommendedHeaderDepthIn(ro.widthIn, !!state.wall.loadBearing);
+      if (recHeader != null) patch.headerDepthIn = recHeader;
+      State.updateOpening(i, patch);
+    }
   }
 
   function findOpenSpot(widthIn) {
@@ -510,7 +815,9 @@
   }
 
   // -------------------- Save / Load --------------------
-  async function saveProject(forceNew) {
+  async function saveProject(opts) {
+    const forceNew = !!(opts && opts.forceNew);
+    const silent = !!(opts && opts.silent);
     const s = State.get();
     const payload = {
       name: s.projectName,
@@ -522,9 +829,18 @@
       if (!forceNew && s.projectId) proj = await API.updateProject(s.projectId, payload);
       else proj = await API.createProject(payload);
       s.projectId = proj.id;
-      flashStatus(`Saved "${proj.name}"`);
+      history.replaceState(null, "", `?project=${proj.id}`);
+      lastSavedDocJson = JSON.stringify(proj.data);
+      State.markSaved();
+      if (!silent) flashStatus(`Saved "${proj.name}"`);
+      return proj;
     } catch (e) {
+      if (silent) {
+        flashStatus(`Autosave failed: ${e.message}`);
+        return null;
+      }
       alert("Save failed: " + e.message);
+      return null;
     }
   }
 
@@ -567,8 +883,11 @@
              <div class="muted">${r.updated_at} · ${r.units_mode}</div></span>
            <span class="del" title="Delete">✕</span>`;
         li.querySelector("span").onclick = async () => {
+          clearPendingAutosave();
           const full = await API.getProject(r.id);
           State.loadDocument(full.data, full);
+          history.pushState(null, "", `?project=${r.id}`);
+          lastSavedDocJson = JSON.stringify(full.data);
           m.classList.add("hidden");
           flashStatus(`Opened "${full.name}"`);
         };
@@ -576,6 +895,13 @@
           e.stopPropagation();
           if (!confirm(`Delete "${r.name}"?`)) return;
           await API.deleteProject(r.id);
+          if (State.get().projectId === r.id) {
+            clearPendingAutosave();
+            State.reset();
+            applyDefaultFramingPresetToActiveWall();
+            lastSavedDocJson = null;
+            history.replaceState(null, "", window.location.pathname);
+          }
           openProjectsModal();
         };
         list.appendChild(li);
@@ -596,6 +922,73 @@
   function updateUnitsModeUI() {
     $("selUnits").value = State.get().unitsMode;
   }
+  function updateHistoryButtons() {
+    $("btnUndo").disabled = !State.canUndo();
+    $("btnRedo").disabled = !State.canRedo();
+  }
+
+  function serializeDocument() {
+    return JSON.stringify(State.toDocument());
+  }
+
+  function clearPendingAutosave() {
+    if (autosaveTimer) {
+      window.clearTimeout(autosaveTimer);
+      autosaveTimer = null;
+    }
+  }
+
+  function setAutosaveIndicator(text, kind, holdMs) {
+    const el = $("autosaveIndicator");
+    if (!el) return;
+    if (autosaveIndicatorTimer) {
+      window.clearTimeout(autosaveIndicatorTimer);
+      autosaveIndicatorTimer = null;
+    }
+    if (!text) {
+      el.textContent = "";
+      el.className = "autosave-indicator";
+      return;
+    }
+    el.textContent = text;
+    el.className = `autosave-indicator show ${kind || ""}`.trim();
+    if (holdMs) {
+      autosaveIndicatorTimer = window.setTimeout(() => {
+        el.textContent = "";
+        el.className = "autosave-indicator";
+        autosaveIndicatorTimer = null;
+      }, holdMs);
+    }
+  }
+
+  function scheduleAutosave() {
+    if (suppressAutosave || !State.hasSavedProject()) return;
+    const nextDocJson = serializeDocument();
+    if (nextDocJson === lastSavedDocJson) return;
+    clearPendingAutosave();
+    autosaveTimer = window.setTimeout(async () => {
+      autosaveTimer = null;
+      const currentDocJson = serializeDocument();
+      if (currentDocJson === lastSavedDocJson) return;
+      setAutosaveIndicator("Autosaving...", "saving");
+      const proj = await saveProject({ silent: true });
+      if (proj) {
+        lastSavedDocJson = JSON.stringify(proj.data);
+        setAutosaveIndicator("Autosaved", "saved", 1500);
+      } else {
+        setAutosaveIndicator("Autosave failed", "error", 2500);
+      }
+    }, AUTOSAVE_DELAY_MS);
+  }
+
+  function bindUnloadWarning() {
+    window.addEventListener("beforeunload", (e) => {
+      if (State.hasSavedProject() || !State.isDirty()) return;
+      e.preventDefault();
+      e.returnValue = "";
+    });
+  }
+
   function syncWallInputsFromState() {
     const s = State.get();
     const mode = s.unitsMode;
@@ -603,6 +996,9 @@
     $("wHeight").value = Units.format(s.wall.heightIn, mode);
     $("roofPitch").value = Units.format(s.wall.roofPitchIn12, mode);
     $("sideClearance").value = Units.format(s.wall.sideClearance, mode);
+    $("windowShimSide").value = Units.format(s.wall.windowShimSideIn || 0.5, mode);
+    $("windowShimTop").value = Units.format(s.wall.windowShimTopIn || 0.5, mode);
+    $("windowShimBottom").value = Units.format(s.wall.windowShimBottomIn || 0.5, mode);
     $("roofOvLow").value  = Units.format(s.wall.roofOverhangLowIn  || 0, mode);
     $("roofOvHigh").value = Units.format(s.wall.roofOverhangHighIn || 0, mode);
     $("selStud").value = s.wall.studNominal;
@@ -613,8 +1009,53 @@
     $("selRoofHighSide").value = s.wall.roofHighSide;
     $("selRoofRafter").value = s.wall.roofRafterNominal || "2x6";
     $("selRoofFascia").value = s.wall.roofFasciaNominal || "1x6";
+    $("cbLoadBearing").checked = !!s.wall.loadBearing;
+    const hasWallImage = !!s.wall.viewImageDataUrl;
+    $("wallImageMeta").textContent = hasWallImage ? "Outside image attached (compressed JPEG)" : "No image";
+    $("btnClearWallImage").disabled = !hasWallImage;
+    const imageOffset = Math.max(-100, Math.min(100, parseInt(s.wall.viewImageOffsetY || 0, 10)));
+    $("rngWallImageOffsetY").value = String(imageOffset);
+    $("rngWallImageOffsetY").disabled = !hasWallImage;
+    $("lblWallImageOffsetY").textContent = `${imageOffset}%`;
     const showRoof = s.wall.roofStyle === "slope";
     document.querySelectorAll(".roof-row").forEach(el => el.classList.toggle("hidden", !showRoof));
+    $('selRoofStyle').value = s.wall.roofStyle || 'flat';
+  }
+
+  async function compressImageFile(file, maxWidth, quality) {
+    const dataUrl = await readFileAsDataUrl(file);
+    const img = await loadImageFromDataUrl(dataUrl);
+    const targetW = Math.max(1, Math.min(img.naturalWidth || img.width, maxWidth));
+    const scale = targetW / (img.naturalWidth || img.width || targetW);
+    const targetH = Math.max(1, Math.round((img.naturalHeight || img.height || 1) * scale));
+    const canvas = document.createElement("canvas");
+    canvas.width = targetW;
+    canvas.height = targetH;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) throw new Error("Canvas not available");
+    // Flatten transparency for PNG/WebP into white background before JPEG export.
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, targetW, targetH);
+    ctx.drawImage(img, 0, 0, targetW, targetH);
+    return canvas.toDataURL("image/jpeg", quality);
+  }
+
+  function readFileAsDataUrl(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onerror = () => reject(new Error("Failed to read file"));
+      reader.onload = () => resolve(String(reader.result || ""));
+      reader.readAsDataURL(file);
+    });
+  }
+
+  function loadImageFromDataUrl(dataUrl) {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = () => reject(new Error("Failed to decode image"));
+      img.src = dataUrl;
+    });
   }
 
   function refreshInspector() {
@@ -626,12 +1067,22 @@
     editor.classList.remove("hidden"); none.classList.add("hidden");
     $("selType").value = o.kind;
     $("selLeft").value   = Units.format(o.leftIn,  s.unitsMode);
+    $("selCenter").value = Units.format(o.leftIn + o.widthIn / 2, s.unitsMode);
     $("selWidth").value  = Units.format(o.widthIn, s.unitsMode);
     $("selHeight").value = Units.format(o.heightIn, s.unitsMode);
     $("selHead").value   = Units.format(o.headHeightIn, s.unitsMode);
     $("selSill").value   = Units.format(o.sillHeightIn, s.unitsMode);
     $("selHeader").value = Units.format(o.headerDepthIn, s.unitsMode);
+    const unitDims = unitFromRough(o.widthIn, o.heightIn, s.wall);
+    const unitWidth = isFinite(o.windowUnitWidthIn) ? o.windowUnitWidthIn : unitDims.unitWidthIn;
+    const unitHeight = isFinite(o.windowUnitHeightIn) ? o.windowUnitHeightIn : unitDims.unitHeightIn;
+    $("selUseUnitSizing").checked = !!o.windowUseUnitSizing;
+    $("selUnitWidth").value = Units.format(unitWidth, s.unitsMode);
+    $("selUnitHeight").value = Units.format(unitHeight, s.unitsMode);
     $("rowSill").style.display = (o.kind === "window") ? "" : "none";
+    $("rowUseUnitSizing").style.display = (o.kind === "window") ? "" : "none";
+    $("rowUnitWidth").style.display = (o.kind === "window") ? "" : "none";
+    $("rowUnitHeight").style.display = (o.kind === "window") ? "" : "none";
     const violates = !openingFitsRoof(o, s.wall);
     $("rowFitRoof").classList.toggle("hidden", !violates);
   }
@@ -648,7 +1099,7 @@
       `Wall: ${Units.formatShort(s.wall.lengthIn, mode)} × ${Units.formatShort(s.wall.heightIn, mode)}\n` +
       (s.wall.roofStyle === "slope"
         ? `Roof: ${Units.formatShort(s.wall.roofPitchIn12, mode)} in 12, ${s.wall.roofHighSide} high, heights ${Units.formatShort(sm.lowWallHeight, mode)} to ${Units.formatShort(sm.highWallHeight, mode)}\n`
-        : "") +
+        : s.wall.roofStyle === "none" ? "Roof: None (open top)\n" : "") +
       `Verticals: ${sm.studCount}\n` +
       `Openings: ${sm.openings}  (area ${sm.openingArea} ft²)\n` +
       `Net Area: ${sm.netArea} ft²`;
@@ -668,7 +1119,7 @@
     // Advisory (header span, egress, sheathing)
     const advNotes = [];
     for (let i = 0; i < s.openings.length; i++) {
-      advNotes.push(...Advisor.checkOpening(s.openings[i], i));
+      advNotes.push(...Advisor.checkOpening(s.openings[i], i, s.wall));
     }
     const sheets = Advisor.sheathingSheets(s.wall);
     advNotes.push(`Estimated sheathing: ${sheets} × (4×8) panels for one face (10% waste).`);
@@ -704,7 +1155,7 @@
       `${s.wall.studNominal} @ ${Units.formatShort(s.wall.spacingOC, s.unitsMode)} O.C.  ·  `
       + (s.wall.roofStyle === "slope"
         ? `roof ${Units.formatShort(s.wall.roofPitchIn12, s.unitsMode)} in 12 (${s.wall.roofHighSide} high)  ·  `
-        : "")
+        : s.wall.roofStyle === "none" ? "no roof  ·  " : "")
       + `${Units.formatShort(s.wall.lengthIn, s.unitsMode)} × ${Units.formatShort(s.wall.heightIn, s.unitsMode)}  ·  `
       + `${c.summary.studCount} verticals  ·  ${c.summary.netArea} ft² net`;
 
@@ -792,10 +1243,13 @@
       SvgExport.download(`${safe}_plan.svg`, svg);
     };
     $("btnPlanPrint").onclick = () => {
-      // Use print via a simple new window
       const svg = SvgExport.exportPlan(State.get());
       const w = window.open("", "_blank");
-      w.document.write(`<!doctype html><html><head><title>Plan</title></head><body style="margin:0">${svg}<script>window.onload=()=>window.print()</script></body></html>`);
+      w.document.write(`<!doctype html><html><head><title>Plan</title><style>
+        @page { margin: 0.5in; }
+        html, body { margin: 0; padding: 0; }
+        svg { width: 100%; height: auto; display: block; }
+      </style></head><body>${svg}<script>window.onload=()=>window.print()<\/script></body></html>`);
       w.document.close();
     };
   }
@@ -833,7 +1287,7 @@
     // Only auto-collapse if the user hasn't explicitly opened/closed it
     const storageKey = "collapsed:grpRoof";
     if (localStorage.getItem(storageKey) != null) return;
-    const shouldCollapse = s.wall.roofStyle === head.getAttribute("data-auto-collapse");
+    const shouldCollapse = s.wall.roofStyle !== "slope";
     setCollapsed(head, body, shouldCollapse);
   }
 

@@ -59,7 +59,7 @@
     },
 
     setZoom(z) {
-      this.zoom = Math.max(0.05, Math.min(3.0, z));
+      this.zoom = Math.max(0.05, Math.min(20.0, z));
       this.render();
     },
 
@@ -80,7 +80,7 @@
       const w = Math.max(1, maxX - minX);
       const h = Math.max(1, maxY - minY);
       const zx = wPx / w, zy = hPx / h;
-      this.zoom = Math.max(0.05, Math.min(3.0, Math.min(zx, zy)));
+      this.zoom = Math.max(0.05, Math.min(20.0, Math.min(zx, zy)));
       this.camX = minX - pad / this.zoom;
       this.camY = minY - pad / this.zoom;
       const zoomInput = document.getElementById("rngPlanZoom");
@@ -192,6 +192,7 @@
         mode: e.shiftKey ? "rotate" : "move",
         startWX: wx, startWY: wy,
         origPlan: { ...w.plan },
+        lastValidPlan: { ...w.plan },
         anchorOffsetIn,
         origAnchor: anchor,
       };
@@ -224,10 +225,22 @@
         // the cursor.
         let visDeg = Math.atan2(dy, dx) * 180 / Math.PI;
         visDeg = Math.round(visDeg / 15) * 15; // 15° snap
-        w.plan.rotationDeg = -visDeg;
         const rad = visDeg * Math.PI / 180; // visual rad
-        w.plan.x = this.dragging.origAnchor.x - this.dragging.anchorOffsetIn * Math.cos(rad);
-        w.plan.y = this.dragging.origAnchor.y - this.dragging.anchorOffsetIn * Math.sin(rad);
+        const proposed = {
+          x: this.dragging.origAnchor.x - this.dragging.anchorOffsetIn * Math.cos(rad),
+          y: this.dragging.origAnchor.y - this.dragging.anchorOffsetIn * Math.sin(rad),
+          rotationDeg: -visDeg,
+        };
+        if (!this.overlapsAnyWall(this.dragging.idx, proposed)) {
+          w.plan.x = proposed.x;
+          w.plan.y = proposed.y;
+          w.plan.rotationDeg = proposed.rotationDeg;
+          this.dragging.lastValidPlan = { ...proposed };
+        } else {
+          w.plan.x = this.dragging.lastValidPlan.x;
+          w.plan.y = this.dragging.lastValidPlan.y;
+          w.plan.rotationDeg = this.dragging.lastValidPlan.rotationDeg;
+        }
       } else {
         const rad = -(w.plan.rotationDeg || 0) * Math.PI / 180;
         // Free-translate: move the clicked point by the cursor delta
@@ -253,8 +266,16 @@
           px = Math.round(px / SNAP_IN) * SNAP_IN;
           py = Math.round(py / SNAP_IN) * SNAP_IN;
         }
-        w.plan.x = px;
-        w.plan.y = py;
+        const proposed = { x: px, y: py, rotationDeg: w.plan.rotationDeg || 0 };
+        if (!this.overlapsAnyWall(this.dragging.idx, proposed)) {
+          w.plan.x = proposed.x;
+          w.plan.y = proposed.y;
+          this.dragging.lastValidPlan = { ...proposed };
+        } else {
+          w.plan.x = this.dragging.lastValidPlan.x;
+          w.plan.y = this.dragging.lastValidPlan.y;
+          this.activeSnap = null;
+        }
       }
       this.render();
       this.renderStatus(wx, wy);
@@ -284,7 +305,8 @@
       const sp = this.screenPos(e);
       const worldX = this.sx(sp.x), worldY = this.sy(sp.y);
       const factor = e.deltaY > 0 ? 0.9 : 1.1;
-      this.setZoom(this.zoom * factor);
+      // Set zoom directly (skip setZoom to avoid a premature render before camX/camY are updated)
+      this.zoom = Math.max(0.05, Math.min(20.0, this.zoom * factor));
       // keep cursor's world point stable
       this.camX = worldX - sp.x / this.zoom;
       this.camY = worldY - sp.y / this.zoom;
@@ -304,62 +326,93 @@
       return best;
     },
 
-    // Find the best snap across candidate endpoints while enforcing a
-    // physical no-overlap corner model:
-    // - L-corner endpoint snaps place butting walls on the neighbor face
-    //   (offset by neighbor depth/2), not on the same centerline point.
-    // - T-snaps land on the neighbor face rather than its centerline.
+    // Snap a dragged wall endpoint to a face of any neighbor wall.
+    //
+    // Real wood-framing rule: the only valid connection is "end of moving
+    // wall touches a face of another wall".  This is true regardless of
+    // whether the contact lands mid-span (T-intersection) or right at the
+    // through wall's own end (L-corner).  The snap formula is the same in
+    // both cases — the butt wall's end-centerline lands on the through
+    // wall's face at the projected, clamped contact point.  At a corner
+    // that means the butt wall caps off the through wall's outer end
+    // (extending past it by `movingHalf`), which is how a standard
+    // platform-framed L-corner is built.
+    //
+    // Snap targets are rejected if they would force overlap with any
+    // other wall (touching is fine, penetration is not).
     bestEndpointSnap(movingIdx, endpoints) {
       const segs = this.segments();
-      const moving = segs.find((s) => s.idx === movingIdx);
-      if (!moving) return null;
-      const umx = Math.cos(moving.rad), umy = Math.sin(moving.rad);
       let best = null, bestD = SNAP_ENDPOINT_IN;
-      // 1) Endpoint-to-endpoint snaps (L-corners)
+      const moving = this.state && this.state.walls ? this.state.walls[movingIdx] : null;
+      const startEp = endpoints.find((ep) => ep.endKind === "start") || endpoints[0];
+      const rotDeg = moving && moving.plan ? (moving.plan.rotationDeg || 0) : 0;
+
+      const tryCandidate = (ep, tx, ty) => {
+        const d = Math.hypot(ep.x - tx, ep.y - ty);
+        if (d >= bestD) return;
+        const dx = tx - ep.x;
+        const dy = ty - ep.y;
+        const proposed = {
+          x: startEp.x + dx,
+          y: startEp.y + dy,
+          rotationDeg: rotDeg,
+        };
+        if (this.overlapsAnyWall(movingIdx, proposed)) return;
+        bestD = d;
+        best = { target: { x: tx, y: ty }, endpoint: ep };
+      };
+
       for (const s of segs) {
         if (s.idx === movingIdx) continue;
-        for (const tp of [{ x: s.x0, y: s.y0 }, { x: s.x1, y: s.y1 }]) {
-          for (const ep of endpoints) {
-            let targetX = tp.x;
-            let targetY = tp.y;
-            // Lower index contains the corner.  Higher index butts into it.
-            // For the butting wall, snap to the neighbor face so solids don't overlap.
-            if (movingIdx > s.idx) {
-              const inset = (s.w.wall.studDepthIn || 3.5) / 2;
-              const dir = ep.endKind === "start" ? 1 : -1; // interior direction at that endpoint
-              targetX += dir * umx * inset;
-              targetY += dir * umy * inset;
-            }
-            const d = Math.hypot(ep.x - targetX, ep.y - targetY);
-            if (d < bestD) {
-              bestD = d;
-              best = { target: { x: targetX, y: targetY }, endpoint: ep };
-            }
+        const depth = s.w.wall.studDepthIn || 3.5;
+        const dx = s.x1 - s.x0, dy = s.y1 - s.y0;
+        const L = Math.sqrt(dx*dx + dy*dy); if (L < 1e-6) continue;
+        const ux = dx / L, uy = dy / L;
+        const nx = -uy,    ny = ux;
+        const half = depth / 2;
+
+        for (const ep of endpoints) {
+          const tRaw = ((ep.x - s.x0) * dx + (ep.y - s.y0) * dy) / (L * L);
+          if (tRaw < -0.08 || tRaw > 1.08) continue;
+          const t = Math.max(0, Math.min(1, tRaw));
+          const cx = s.x0 + t * dx, cy = s.y0 + t * dy;
+          for (const sign of [1, -1]) {
+            tryCandidate(ep, cx + nx * half * sign, cy + ny * half * sign);
           }
         }
       }
-      if (best) return best;
-      // 2) Endpoint-to-wall-face (T-intersections) — snap to nearest point
-      //    along a neighbor's centerline, then shift to the nearest face.
-      for (const s of segs) {
-        if (s.idx === movingIdx) continue;
-        const dx = s.x1 - s.x0, dy = s.y1 - s.y0;
-        const L2 = dx*dx + dy*dy; if (L2 < 1e-6) continue;
-        const L = Math.sqrt(L2);
-        const nx = -dy / L, ny = dx / L;
-        const faceOff = (s.w.wall.studDepthIn || 3.5) / 2;
-        for (const ep of endpoints) {
-          const t = ((ep.x - s.x0) * dx + (ep.y - s.y0) * dy) / L2;
-          if (t <= 0.02 || t >= 0.98) continue;
-          const cx = s.x0 + t * dx, cy = s.y0 + t * dy;
-          const side = (ep.x - cx) * nx + (ep.y - cy) * ny >= 0 ? 1 : -1;
-          const tx = cx + nx * faceOff * side;
-          const ty = cy + ny * faceOff * side;
-          const d = Math.hypot(ep.x - tx, ep.y - ty);
-          if (d < bestD) { bestD = d; best = { target: { x: tx, y: ty }, endpoint: ep }; }
-        }
-      }
       return best;
+    },
+
+    wallRectFromPlan(wallObj, plan) {
+      const len = wallObj.wall.lengthIn || 0;
+      const depth = wallObj.wall.studDepthIn || 3.5;
+      const rad = -(plan.rotationDeg || 0) * Math.PI / 180;
+      const ux = Math.cos(rad), uy = Math.sin(rad);
+      const nx = -uy, ny = ux;
+      const half = depth / 2;
+      const x0 = plan.x, y0 = plan.y;
+      const x1 = x0 + len * ux, y1 = y0 + len * uy;
+      return [
+        { x: x0 + nx * half, y: y0 + ny * half },
+        { x: x0 - nx * half, y: y0 - ny * half },
+        { x: x1 - nx * half, y: y1 - ny * half },
+        { x: x1 + nx * half, y: y1 + ny * half },
+      ];
+    },
+
+    overlapsAnyWall(movingIdx, proposedPlan) {
+      if (!this.state || !this.state.walls || movingIdx < 0 || movingIdx >= this.state.walls.length) return false;
+      const moving = this.state.walls[movingIdx];
+      const a = this.wallRectFromPlan(moving, proposedPlan);
+      for (let i = 0; i < this.state.walls.length; i++) {
+        if (i === movingIdx) continue;
+        const b = this.wallRectFromPlan(this.state.walls[i], this.state.walls[i].plan);
+        // Allow touching (shared edge/point). Only block real penetration.
+        // Small positive epsilon absorbs floating-point drift at snap positions.
+        if (polygonsOverlapArea(a, b, 0.05)) return true;
+      }
+      return false;
     },
 
     autoArrangeRectangle() {
@@ -470,52 +523,29 @@
       const wallColor   = active ? "#1f6fb4" : (hover ? "#444" : "#222");
       const openings    = this.openingSpans(seg.w);
 
-      // Corner adjustments: push start/end in or out so L-corners and
-      // T-intersections close cleanly.  localStart/localEnd are in world
-      // inches measured along the wall axis.
+      // Real-construction model: a wall is drawn at exactly its entered
+      // length, end-to-end.  No wall extends past its own end.  When another
+      // wall butts into this wall's face, the contact location is recorded
+      // in `intersectionStudsAt`; we draw an extra nailer stud (or a pair
+      // for mid-span T) inside *this* wall's existing stud zone.  No corner-
+      // post extension box is drawn — the corner post is always inside the
+      // wall, between its end stud and the next stud over.
       const c = (this.cornerInfo && this.cornerInfo[seg.idx]) || {
-        startInset: 0, endInset: 0,
-        startContains: false, endContains: false,
-        startNeighborDepth: 0, endNeighborDepth: 0,
+        intersectionStudsAt: [],
       };
-      const localStart   = c.startInset;                 // negative → extend past 0
-      const localEnd     = seg.len - c.endInset;         // > seg.len when extending
-      const pxLocalStart = localStart * this.zoom;
-      const pxLocalEnd   = localEnd   * this.zoom;
+      const pxLocalStart = 0;
+      const pxLocalEnd   = wallLen;
       const pxRectW      = pxLocalEnd - pxLocalStart;
 
       ctx.save();
       ctx.translate(this.wx(seg.x0), this.wy(seg.y0));
       ctx.rotate(seg.rad);
 
-      // ── 1. Wall cavity fill (insulation/stud bay area) ───────────────────
+      // ── 1. Wall cavity fill ──────────────────────────────────────────────
       ctx.fillStyle = "#ede8e0";
       ctx.fillRect(pxLocalStart, -half, pxRectW, pxThickness);
 
-      // ── 1b. Corner posts at ends this wall "contains" ────────────────────
-      // Fill the extended corner zone with a solid post so the butted
-      // neighbor's rect lines up against lumber, not empty cavity.
-      const postColor = "#c8845a"; // same as king studs
-      if (c.startContains) {
-        const w = (c.startNeighborDepth / 2) * this.zoom;
-        ctx.fillStyle   = postColor;
-        ctx.fillRect(pxLocalStart, -half, w, pxThickness);
-        ctx.strokeStyle = "rgba(0,0,0,0.25)";
-        ctx.lineWidth   = 0.5;
-        ctx.strokeRect(pxLocalStart, -half, w, pxThickness);
-      }
-      if (c.endContains) {
-        const w = (c.endNeighborDepth / 2) * this.zoom;
-        ctx.fillStyle   = postColor;
-        ctx.fillRect(pxLocalEnd - w, -half, w, pxThickness);
-        ctx.strokeStyle = "rgba(0,0,0,0.25)";
-        ctx.lineWidth   = 0.5;
-        ctx.strokeRect(pxLocalEnd - w, -half, w, pxThickness);
-      }
-
-      // ── 2. Framing members shown in section (professional convention) ────
-      // Each stud/king/jack drawn as a filled 1.5"-wide rectangle crossing
-      // the full wall depth, exactly as they appear in a panelized shop drawing.
+      // ── 2. Framing members in section ────────────────────────────────────
       if (typeof Framing !== "undefined") {
         const fr = Framing.compute({ wall: seg.w.wall, openings: seg.w.openings || [] });
         for (const m of fr.members) {
@@ -523,18 +553,45 @@
           if (!["stud", "king", "jack", "cripple_above", "cripple_below"].includes(m.kind)) continue;
           const px = m.x * this.zoom;
           const pw = (m.w || 1.5) * this.zoom;
-          // Skip the end studs on ends that BUTT into a neighbor — the
-          // neighbor's corner post is acting as the corner stud there.
-          if (c.startInset > 0 && m.x < c.startInset - 0.01) continue;
-          if (c.endInset   > 0 && m.x + (m.w || 1.5) > seg.len - c.endInset + 0.01) continue;
           ctx.fillStyle =
             m.kind === "king" ? "#c8845a" :
             m.kind === "jack" ? "#d49060" :
-            "#b0a898";                        // stud: warm gray (lumber)
+            "#b0a898";
           ctx.fillRect(px, -half, pw, pxThickness);
           ctx.strokeStyle = "rgba(0,0,0,0.25)";
           ctx.lineWidth = 0.5;
           ctx.strokeRect(px, -half, pw, pxThickness);
+        }
+      }
+
+      // ── 2b. Intersection stud pairs where another wall butts into this one ─
+      // Mid-span T intersections use a pair straddling the contact line.
+      // End/corner intersections use a single added stud on the INSIDE of
+      // the end stud (never in the outside extension zone).
+      const T = (seg.w.wall.studThickIn || 1.5) * this.zoom;
+      const studThickIn = seg.w.wall.studThickIn || 1.5;
+      for (const tAlong of (c.intersectionStudsAt || [])) {
+        const cx = tAlong * seg.len * this.zoom;
+        const distFromStart = tAlong * seg.len;
+        const distFromEnd   = (1 - tAlong) * seg.len;
+        // Use absolute distance: if the contact is so close to the end
+        // that a stud pair won't fit before the end king, draw a single
+        // nailer stud just inside the end king (this is the L-corner
+        // case).  Otherwise draw a pair straddling the contact line
+        // (mid-span T).
+        const cornerZone = studThickIn + 0.5;
+        let offsets;
+        if (distFromStart < cornerZone)      offsets = [T];
+        else if (distFromEnd < cornerZone)   offsets = [-2 * T];
+        else                                 offsets = [-T, 0];
+        for (const offset of offsets) {
+          const rx = cx + offset;
+          if (rx < pxLocalStart - 0.5 || rx + T > pxLocalEnd + 0.5) continue;
+          ctx.fillStyle = "#c8845a";
+          ctx.fillRect(rx, -half, T, pxThickness);
+          ctx.strokeStyle = "rgba(0,0,0,0.25)";
+          ctx.lineWidth = 0.5;
+          ctx.strokeRect(rx, -half, T, pxThickness);
         }
       }
 
@@ -563,6 +620,16 @@
           ctx.setLineDash([3, 3]);
           ctx.beginPath();
           ctx.arc(x1, -half, swingR, 0, Math.PI / 2, false); // swing arc
+          ctx.stroke();
+          ctx.setLineDash([]);
+        } else if (op.kind === "buck") {
+          // Buck: plain open rough frame — diagonal X to indicate unfinished opening
+          ctx.strokeStyle = "rgba(180,100,0,0.45)";
+          ctx.lineWidth = 1;
+          ctx.setLineDash([4, 4]);
+          ctx.beginPath();
+          ctx.moveTo(x1, -half); ctx.lineTo(x2, half);
+          ctx.moveTo(x2, -half); ctx.lineTo(x1, half);
           ctx.stroke();
           ctx.setLineDash([]);
         } else {
@@ -768,6 +835,42 @@
     t = Math.max(0, Math.min(1, t));
     const cx = x1 + t * dx, cy = y1 + t * dy;
     return Math.hypot(px - cx, py - cy);
+  }
+
+  function polygonsOverlapArea(polyA, polyB, eps) {
+    const axes = [];
+    collectAxes(polyA, axes);
+    collectAxes(polyB, axes);
+    for (const axis of axes) {
+      const a = projectPoly(polyA, axis);
+      const b = projectPoly(polyB, axis);
+      // Treat edge-touching as non-overlap; only positive area overlap is blocked.
+      if (a.max <= b.min + eps || b.max <= a.min + eps) return false;
+    }
+    return true;
+  }
+
+  function collectAxes(poly, out) {
+    for (let i = 0; i < poly.length; i++) {
+      const p = poly[i];
+      const q = poly[(i + 1) % poly.length];
+      const ex = q.x - p.x;
+      const ey = q.y - p.y;
+      const len = Math.hypot(ex, ey);
+      if (len < 1e-9) continue;
+      out.push({ x: -ey / len, y: ex / len });
+    }
+  }
+
+  function projectPoly(poly, axis) {
+    let min = Infinity;
+    let max = -Infinity;
+    for (const p of poly) {
+      const v = p.x * axis.x + p.y * axis.y;
+      if (v < min) min = v;
+      if (v > max) max = v;
+    }
+    return { min, max };
   }
 
   global.PlanView = PlanView;

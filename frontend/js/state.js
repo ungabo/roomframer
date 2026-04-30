@@ -26,7 +26,7 @@
     spacingOC: 16,
     topPlates: 2,
     bottomPlates: 1,
-    roofStyle: "flat",
+    roofStyle: "none",
     roofPitchIn12: 4,
     roofHighSide: "right",
     roofOverhangLowIn: 12,
@@ -38,6 +38,12 @@
     roofFasciaDepthIn: 5.5,
     roofFasciaThickIn: 0.75,
     sideClearance: 0.5,
+    windowShimSideIn: 0.5,
+    windowShimTopIn: 0.5,
+    windowShimBottomIn: 0.5,
+    loadBearing: false,
+    viewImageDataUrl: null,
+    viewImageOffsetY: 0,
   });
 
   function newWall(name) {
@@ -70,9 +76,12 @@
   };
 
   let _state = DEFAULT();
+  const HISTORY_LIMIT = 30;
   const undoStack = [];
   const redoStack = [];
   const listeners = [];
+  let _isDirty = false;
+  let _pendingCommitEmit = false;
 
   function syncProxies() {
     if (_state.activeWallIdx < 0 || _state.activeWallIdx >= _state.walls.length) {
@@ -90,35 +99,77 @@
   }
   function emit() { syncProxies(); listeners.forEach(fn => fn(_state)); }
 
+  function emitAfterCommit() {
+    if (_pendingCommitEmit) return;
+    _pendingCommitEmit = true;
+    Promise.resolve().then(() => {
+      _pendingCommitEmit = false;
+      emit();
+    });
+  }
+
+  function clearHistory() {
+    undoStack.length = 0;
+    redoStack.length = 0;
+  }
+
+  function replaceHistory(nextUndo, nextRedo) {
+    clearHistory();
+    (nextUndo || []).slice(-HISTORY_LIMIT).forEach((item) => undoStack.push(item));
+    (nextRedo || []).slice(-HISTORY_LIMIT).forEach((item) => redoStack.push(item));
+  }
+
   function pushHistory() {
     undoStack.push(snapshot());
-    if (undoStack.length > 100) undoStack.shift();
+    if (undoStack.length > HISTORY_LIMIT) undoStack.shift();
     redoStack.length = 0;
+    _isDirty = true;
+  }
+
+  function markDirty() {
+    _isDirty = true;
+  }
+
+  function markClean() {
+    _isDirty = false;
   }
 
   const State = {
     get: () => _state,
-    set(partial) { Object.assign(_state, partial); emit(); },
+    set(partial) { Object.assign(_state, partial); markDirty(); emit(); },
+    setWithHistory(partial) { pushHistory(); Object.assign(_state, partial); emit(); },
     replace(next) { _state = next; emit(); },
-    reset() { pushHistory(); _state = DEFAULT(); emit(); },
+    reset() {
+      clearHistory();
+      _state = DEFAULT();
+      markDirty();
+      emit();
+    },
     onChange(fn) { listeners.push(fn); },
 
     // history
-    commit() { pushHistory(); emit(); },
+    commit() { pushHistory(); emitAfterCommit(); },
     undo() {
       if (!undoStack.length) return;
       redoStack.push(snapshot());
+      if (redoStack.length > HISTORY_LIMIT) redoStack.shift();
       _state = undoStack.pop();
+      markDirty();
       emit();
     },
     redo() {
       if (!redoStack.length) return;
       undoStack.push(snapshot());
+      if (undoStack.length > HISTORY_LIMIT) undoStack.shift();
       _state = redoStack.pop();
+      markDirty();
       emit();
     },
     canUndo: () => undoStack.length > 0,
     canRedo: () => redoStack.length > 0,
+    isDirty: () => _isDirty,
+    hasSavedProject: () => !!_state.projectId,
+    markSaved() { markClean(); },
 
     // multi-wall helpers
     addWall(name) {
@@ -165,15 +216,17 @@
       const w = _state.walls[_state.activeWallIdx];
       if (!w) return;
       w.name = name || w.name;
+      markDirty();
       emit();
     },
     updateWallPlan(idx, patch) {
       const w = _state.walls[idx];
       if (!w) return;
       w.plan = Object.assign({ x: 0, y: 0, rotationDeg: 0 }, w.plan, patch);
+      markDirty();
       emit();
     },
-    commitWallPlan() { pushHistory(); emit(); },
+    commitWallPlan() { pushHistory(); emitAfterCommit(); },
 
     // opening helpers (operate on active wall)
     addOpening(o) {
@@ -189,6 +242,7 @@
       if (!aw || idx < 0 || idx >= aw.openings.length) return;
       if (withHistory) pushHistory();
       Object.assign(aw.openings[idx], patch);
+      markDirty();
       emit();
     },
     removeOpening(idx) {
@@ -222,10 +276,13 @@
           showGrid: _state.showGrid,
           colorCode: _state.colorCode,
         },
+        history: {
+          undo: undoStack.slice(-HISTORY_LIMIT),
+          redo: redoStack.slice(-HISTORY_LIMIT),
+        },
       };
     },
     loadDocument(data, meta) {
-      pushHistory();
       _state.projectId   = meta.id || null;
       _state.projectName = meta.name || "Untitled Project";
       _state.unitsMode   = meta.units_mode || "ftin";
@@ -236,13 +293,25 @@
           id: w.id || "w" + i + Date.now(),
           name: w.name || `Wall ${i + 1}`,
           wall: Object.assign({}, DEFAULT_WALL_PROPS(), w.wall || {}),
-          openings: (w.openings || []).map((o, j) => ({ id: o.id || ("op" + j), ...o })),
+          openings: (w.openings || []).map((o, j) => {
+            const opening = { id: o.id || ("op" + j), ...o };
+            if (opening.kind === "window" && !isFinite(opening.defaultSillHeightIn)) {
+              opening.defaultSillHeightIn = isFinite(opening.sillHeightIn) ? opening.sillHeightIn : 24;
+            }
+            return opening;
+          }),
           plan: Object.assign({ x: 0, y: 0, rotationDeg: 0 }, w.plan || {}),
         }));
       } else {
         const first = newWall(meta.name || "Wall 1");
         first.wall = Object.assign({}, DEFAULT_WALL_PROPS(), data.wall || {});
-        first.openings = (data.openings || []).map((o, i) => ({ id: o.id || ("op" + i), ...o }));
+        first.openings = (data.openings || []).map((o, i) => {
+          const opening = { id: o.id || ("op" + i), ...o };
+          if (opening.kind === "window" && !isFinite(opening.defaultSillHeightIn)) {
+            opening.defaultSillHeightIn = isFinite(opening.sillHeightIn) ? opening.sillHeightIn : 24;
+          }
+          return opening;
+        });
         walls = [first];
       }
       _state.walls = walls;
@@ -254,6 +323,8 @@
       _state.showLabels = v.showLabels !== false;
       _state.showGrid   = !!v.showGrid;
       _state.colorCode  = v.colorCode !== false;
+      replaceHistory(data.history && data.history.undo, data.history && data.history.redo);
+      markClean();
       emit();
     },
   };

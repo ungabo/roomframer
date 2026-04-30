@@ -16,6 +16,7 @@
     cripple_below:  "#78bf8c",
     opening_door:   "#ffffff",
     opening_window: "#e6f4ff",
+    opening_buck:   "#fff8e6",
     rafter:         "#c98755",
     birdsmouth:     "#7a4a22",
     fascia:         "#ad6a3d",
@@ -31,6 +32,7 @@
     const botN = Math.max(1, input.wall.bottomPlates || 1);
     const SC = Math.max(0, input.wall.sideClearance || 0);
     const roofStyle = input.wall.roofStyle || "flat";
+    const loadBearing = !!input.wall.loadBearing;
     const roofPitchIn12 = Math.max(0, input.wall.roofPitchIn12 || 0);
     const roofHighSide = input.wall.roofHighSide || "right";
     const slopePerIn = roofStyle === "slope" ? roofPitchIn12 / 12 : 0;
@@ -122,23 +124,36 @@
 
       const hdrX = kingL_x + T;
       const hdrW = kingR_x - hdrX;
-      members.push({ kind: "header", x: hdrX, y: headerBot, w: hdrW, h: op.headerDepthIn, color: COLOR.header, oid: op.id });
+      members.push({
+        kind: "header",
+        x: hdrX,
+        y: headerBot,
+        w: hdrW,
+        h: op.headerDepthIn,
+        color: COLOR.header,
+        oid: op.id,
+        label: loadBearing ? null : "Flat 2x4",
+        structural: loadBearing,
+      });
 
       if (op.kind === "window") {
         const sillTop = op.sillHeightIn;
         const sillBot = sillTop - T;
-        members.push({ kind: "sill", x: hdrX, y: sillBot, w: hdrW, h: T, color: COLOR.sill, oid: op.id });
+        // Sill sits between jacks (RO width only), not overlapping them
+        members.push({ kind: "sill", x: jackL_x + T, y: sillBot, w: jackR_x - jackL_x - T, h: T, color: COLOR.sill, oid: op.id });
       }
 
       const openingBot = op.kind === "window" ? op.sillHeightIn : bpTop;
       const openingH = headerBot - openingBot;
+      const ghostKind = op.kind === "window" ? "window_ghost" : op.kind === "buck" ? "buck_ghost" : "door_ghost";
+      const ghostColor = op.kind === "window" ? COLOR.opening_window : op.kind === "buck" ? COLOR.opening_buck : COLOR.opening_door;
       members.push({
-        kind: op.kind === "window" ? "window_ghost" : "door_ghost",
+        kind: ghostKind,
         x: ro_l,
         y: openingBot,
         w: op.widthIn,
         h: openingH,
-        color: op.kind === "window" ? COLOR.opening_window : COLOR.opening_door,
+        color: ghostColor,
         oid: op.id,
         ghost: true,
       });
@@ -147,6 +162,8 @@
         op,
         kingL_x,
         kingR_x,
+        jackL_x,
+        jackR_x,
         headerTop,
         sillBot: op.kind === "window" ? op.sillHeightIn - T : null,
       });
@@ -154,6 +171,10 @@
     }
 
     const isInsideKingZone = (x) => openingZones.some((z) => (x + T) > z.kingL_x + 1e-6 && x < z.kingR_x + T - 1e-6);
+    const overlapsMemberAtX = (x, kinds) => members.some((m) => {
+      if (!kinds.includes(m.kind) || typeof m.x !== "number" || typeof m.w !== "number") return false;
+      return (x + T) > m.x + 1e-6 && x < (m.x + m.w) - 1e-6;
+    });
 
     let x = OC - T / 2;
     while (x < W - T) {
@@ -167,14 +188,16 @@
       } else {
         const z = openingZones.find((zz) => (x + T) > zz.kingL_x + 1e-6 && x < zz.kingR_x + T - 1e-6);
         if (z) {
+          const occupiedByKing = overlapsMemberAtX(x, ["king"]);
+          const occupiedByJack = overlapsMemberAtX(x, ["jack"]);
           const caY = z.headerTop;
           const caH = roofBottomAtMember(x, T) - caY;
-          if (caH > 1e-6) {
+          if (!occupiedByKing && caH > 1e-6) {
             members.push({ kind: "cripple_above", x, y: caY, w: T, h: caH, color: COLOR.cripple_above, oid: z.op.id });
           }
           if (z.sillBot != null) {
             const cbH = z.sillBot - bpTop;
-            if (cbH > 1e-6) {
+            if (!occupiedByKing && !occupiedByJack && cbH > 1e-6) {
               members.push({ kind: "cripple_below", x, y: bpTop, w: T, h: cbH, color: COLOR.cripple_below, oid: z.op.id });
             }
           }
@@ -182,6 +205,23 @@
       }
       x += OC;
     }
+
+    // Ensure the window sill has bearing at each end.
+    // Interior below-sill cripples come from the normal wall stud grid pass,
+    // so they stay on wall O.C. layout.
+    openingZones.forEach((z) => {
+      if (z.sillBot == null) return;
+      const cbH = z.sillBot - bpTop;
+      if (cbH <= 1e-6) return;
+
+      // Sill-end bearing cripples flush against each jack
+      const leftEndX  = z.jackL_x + T;
+      const rightEndX = z.jackR_x - T;
+      if (!overlapsMemberAtX(leftEndX,  ["king", "jack", "cripple_below"]))
+        members.push({ kind: "cripple_below", x: leftEndX,  y: bpTop, w: T, h: cbH, color: COLOR.cripple_below, oid: z.op.id });
+      if (rightEndX > leftEndX + T + 1e-6 && !overlapsMemberAtX(rightEndX, ["king", "jack", "cripple_below"]))
+        members.push({ kind: "cripple_below", x: rightEndX, y: bpTop, w: T, h: cbH, color: COLOR.cripple_below, oid: z.op.id });
+    });
 
     if (roofStyle === "slope" && slopePerIn > 0) {
       // Rafter geometry (representative profile on this elevation).
@@ -298,7 +338,12 @@
         case "cripple_below":
           add("Cripple", m.h, studSizeLabel); break;
         case "header":
-          add("Header", m.w, `${studSizeLabel} (depth ${Units.formatShort(m.h, "ftin")})`); break;
+          add(
+            m.structural === false ? "Flat Header" : "Header",
+            m.w,
+            m.label || `${studSizeLabel} (depth ${Units.formatShort(m.h, "ftin")})`
+          );
+          break;
         case "sill":
           add("Window Sill", m.w, studSizeLabel); break;
         case "rafter":

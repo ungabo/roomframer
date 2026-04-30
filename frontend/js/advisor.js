@@ -8,15 +8,38 @@
 (function (global) {
   "use strict";
 
-  // Rough prescriptive header span limits for 2-ply 2x headers in
-  // interior/exterior non-bearing or light-bearing walls (feet).
-  // Values are conservative IRC Table R602.7 style; adjust in real use.
+  const NON_BEARING_HEADER = {
+    size: "flat-2x4",
+    depthIn: 1.5,
+    label: "Flat 2x4",
+  };
+
+  // Rough prescriptive header span limits for 2-ply 2x headers (feet).
   const HEADER_SPAN_FT = {
     "2-2x4":  3.0,
     "2-2x6":  5.0,
     "2-2x8":  6.5,
     "2-2x10": 8.0,
     "2-2x12": 9.5,
+  };
+
+  // Load-bearing walls (exterior or interior bearing, supporting roof/floor above).
+  // More conservative — roughly IRC Table R602.7 single-story bearing values.
+  const HEADER_SPAN_BEARING_FT = {
+    "2-2x4":  2.0,
+    "2-2x6":  3.5,
+    "2-2x8":  5.0,
+    "2-2x10": 6.5,
+    "2-2x12": 8.0,
+  };
+
+  // Actual depth (inches) for each 2-ply header nominal.
+  const HEADER_DEPTH_IN = {
+    "2-2x4":   3.5,
+    "2-2x6":   5.5,
+    "2-2x8":   7.25,
+    "2-2x10":  9.25,
+    "2-2x12": 11.25,
   };
 
   // IRC R310 egress: 5.7 ft² net clear, 24" min height, 20" min width,
@@ -49,14 +72,26 @@
   function setPrices(next) { _prices = { ...DEFAULT_PRICES, ...(next || {}) }; }
   function getPrices() { return { ..._prices }; }
 
-  /** Pick the smallest qualifying header nominal for a rough opening width. */
-  function recommendHeader(roughWidthIn) {
+  /** Pick the smallest qualifying header nominal for a rough opening width.
+   *  Pass loadBearing=true for load-bearing walls (stricter table). */
+  function recommendHeader(roughWidthIn, loadBearing) {
+    if (!loadBearing) {
+      return { size: NON_BEARING_HEADER.size, maxSpanFt: roughWidthIn / 12, depthIn: NON_BEARING_HEADER.depthIn, label: NON_BEARING_HEADER.label };
+    }
     const spanFt = roughWidthIn / 12;
+    const table = HEADER_SPAN_BEARING_FT;
     const order = ["2-2x4","2-2x6","2-2x8","2-2x10","2-2x12"];
     for (const k of order) {
-      if (spanFt <= HEADER_SPAN_FT[k]) return { size: k, maxSpanFt: HEADER_SPAN_FT[k] };
+      if (spanFt <= table[k]) return { size: k, maxSpanFt: table[k], depthIn: HEADER_DEPTH_IN[k] };
     }
     return null;
+  }
+
+  /** Return the recommended header depth in inches for a rough opening.
+   *  Returns null if the span exceeds all prescriptive table values. */
+  function recommendedHeaderDepthIn(roughWidthIn, loadBearing) {
+    const rec = recommendHeader(roughWidthIn, loadBearing);
+    return rec ? rec.depthIn : null;
   }
 
   /** Infer the actual header nominal used from the header depth in inches. */
@@ -69,19 +104,29 @@
     return "2-2x4";
   }
 
-  /** Return advisory warnings for an opening. */
-  function checkOpening(op, idx) {
+  /** Return advisory warnings for an opening.
+   *  Pass the wall object (or { loadBearing: bool }) as the third argument. */
+  function checkOpening(op, idx, wall) {
     const notes = [];
     const label = `Opening ${idx + 1}`;
+    const bearing = !!(wall && wall.loadBearing);
     // Header span check
-    const rec = recommendHeader(op.widthIn);
+    const rec = recommendHeader(op.widthIn, bearing);
+    if (!bearing) {
+      if ((op.headerDepthIn || 0) > NON_BEARING_HEADER.depthIn + 0.01) {
+        notes.push(`${label}: non-load-bearing wall. A ${NON_BEARING_HEADER.label.toLowerCase()} is usually enough unless local detailing requires more.`);
+      } else {
+        notes.push(`${label}: non-load-bearing wall. Typical detail is a ${NON_BEARING_HEADER.label.toLowerCase()} with no structural cripples above.`);
+      }
+    }
     const actual = inferHeaderFromDepth(op.headerDepthIn || 3.0);
-    if (rec) {
+    if (bearing && rec) {
       const order = ["2-2x4","2-2x6","2-2x8","2-2x10","2-2x12"];
       if (order.indexOf(actual) < order.indexOf(rec.size)) {
-        notes.push(`${label}: header ${actual} may be undersized for a ${(op.widthIn/12).toFixed(2)} ft span. Prescriptive suggestion: ${rec.size} (≤ ${rec.maxSpanFt} ft).`);
+        const bearingNote = bearing ? " (load-bearing wall)" : "";
+        notes.push(`${label}: header ${actual} may be undersized for a ${(op.widthIn/12).toFixed(2)} ft span${bearingNote}. Prescriptive suggestion: ${rec.size} (≤ ${rec.maxSpanFt} ft).`);
       }
-    } else {
+    } else if (bearing) {
       notes.push(`${label}: span ${(op.widthIn/12).toFixed(2)} ft exceeds prescriptive 2-ply header tables. Engineered beam required.`);
     }
 
@@ -174,12 +219,16 @@
   global.Advisor = {
     checkOpening,
     recommendHeader,
+    recommendedHeaderDepthIn,
     sheathingSheets,
     costEstimate,
     setPrices,
     getPrices,
     DEFAULT_PRICES,
     EGRESS,
+    NON_BEARING_HEADER,
     HEADER_SPAN_FT,
+    HEADER_SPAN_BEARING_FT,
+    HEADER_DEPTH_IN,
   };
 })(window);

@@ -1,110 +1,111 @@
-/* corners.js — Detect corner connections between walls in the plan view.
+/* corners.js — Detect end-of-wall to face-of-wall connections in plan view.
  *
- * At each wall endpoint, figures out whether this wall "contains" the
- * corner (its rect extends past the centerline endpoint to cover the 3-D
- * corner post) or "butts" into a neighbor (its rect is recessed so its
- * end aligns with the face of the neighbor).
+ * Real wood-framing model implemented here:
+ *  - Walls are rectangles that may TOUCH but never overlap.
+ *  - The only valid connection is "end of wall A meets a face of wall B".
+ *  - When that happens, the wall whose FACE is contacted (the "through wall")
+ *    gets one or more extra nailer studs at the contact location:
+ *      * Mid-span T: a pair of studs on the through wall straddling the
+ *        contact line so the butt wall's end stud nests between them.
+ *      * L corner (contact within ~5% of either end of the through wall):
+ *        a single nailer stud on the inside of the through wall's end stud.
+ *  - The butt wall's end stud is NEVER suppressed.  Both walls keep their
+ *    natural framing; only the through wall gains added members.
+ *  - Walls are drawn at exactly their entered length.  No wall is extended
+ *    past its end to draw the corner — the corner post is *inside* the
+ *    through wall's existing end-stud zone.
  *
- * Rule:
- *   - T-intersection (endpoint lands on another wall's side):
- *     neighbor always contains.  This wall butts.
- *   - L-corner (two endpoints coincide):
- *     the wall with the LOWER array index contains.  The other butts.
- *
- * Corner analysis is done in VISUAL coordinates (using radV = -rotationDeg)
- * so that what the user sees in plan view is what gets analyzed.
+ * Output per wall index i:
+ *   {
+ *     idx,
+ *     intersectionStudsAt: [t, ...]   // 0..1 along through-wall axis
+ *   }
  */
 (function (global) {
   "use strict";
 
-  const TOL = 0.35; // inches — geometric tolerance
+  const FACE_TOL = 0.4;     // inches, strict face-contact tolerance
+  const PROJ_TOL = 0.08;    // allow slight projection overshoot before clamping
 
   function wallGeom(w, idx) {
-    const rad   = (w.plan.rotationDeg || 0) * Math.PI / 180;
-    const radV  = -rad; // visual rotation (matches ctx.rotate(-seg.rad) in plan.js)
+    // plan.js renders with ctx.rotate(-rotationDeg); mirror that here so
+    // the analyzer matches what's drawn on screen.
+    const radV  = -(w.plan.rotationDeg || 0) * Math.PI / 180;
     const depth = w.wall.studDepthIn || 3.5;
     const len   = w.wall.lengthIn;
     const sx = w.plan.x, sy = w.plan.y;
-    const ex = sx + len * Math.cos(radV);
-    const ey = sy + len * Math.sin(radV);
-    return { idx, w, depth, len, radV, sx, sy, ex, ey };
+    const ux = Math.cos(radV), uy = Math.sin(radV);
+    const ex = sx + len * ux;
+    const ey = sy + len * uy;
+    return { idx, w, depth, len, sx, sy, ex, ey };
   }
 
-  function findConnection(i, pt, infos) {
-    // Returns { j, type:'end'|'side' } of the neighbor wall this endpoint
-    // connects to.  T-intersections (side crossings) take priority over
-    // L-corners.  Among L-corner candidates, prefer the lowest index.
-    let bestL = null;
-    let bestSide = null;
-    const a = infos[i];
-    for (let j = 0; j < infos.length; j++) {
-      if (j === i) continue;
-      const b = infos[j];
-      // End-to-end joints can be face-snapped (offset by ~depth/2) rather than
-      // centerline-coincident. Treat anything within half-depth reach as an
-      // endpoint joint candidate.
-      const endReach = Math.max(a.depth, b.depth) / 2 + TOL;
-      const dS = Math.hypot(pt.x - b.sx, pt.y - b.sy);
-      const dE = Math.hypot(pt.x - b.ex, pt.y - b.ey);
-      if (dS <= endReach || dE <= endReach) {
-        if (bestL === null || j < bestL) bestL = j;
-        continue;
-      }
-      const dx = b.ex - b.sx, dy = b.ey - b.sy;
-      const L2 = dx * dx + dy * dy;
-      if (L2 < 1e-6) continue;
-      const t = ((pt.x - b.sx) * dx + (pt.y - b.sy) * dy) / L2;
-      if (t > 0.02 && t < 0.98) {
-        const px = b.sx + t * dx;
-        const py = b.sy + t * dy;
-        const d  = Math.hypot(pt.x - px, pt.y - py);
-        if (d <= b.depth / 2 + TOL) {
-          if (bestSide === null || j < bestSide) bestSide = j;
-        }
-      }
-    }
-    if (bestSide !== null) return { j: bestSide, type: "side" };
-    if (bestL    !== null) return { j: bestL,    type: "end" };
-    return null;
+  function pushUnique(arr, v, tol) {
+    if (!arr.some((x) => Math.abs(x - v) <= tol)) arr.push(v);
+  }
+
+  // Does the point `pt` (an endpoint of another wall) lie on one of `wall`'s
+  // long faces (within FACE_TOL)?  Returns { t, faceDelta } if so.
+  function endpointFaceHit(pt, wall) {
+    const dx = wall.ex - wall.sx;
+    const dy = wall.ey - wall.sy;
+    const L2 = dx * dx + dy * dy;
+    if (L2 < 1e-6) return null;
+
+    const tRaw = ((pt.x - wall.sx) * dx + (pt.y - wall.sy) * dy) / L2;
+    if (tRaw < -PROJ_TOL || tRaw > 1 + PROJ_TOL) return null;
+    const t = Math.max(0, Math.min(1, tRaw));
+
+    const cx = wall.sx + t * dx;
+    const cy = wall.sy + t * dy;
+    const L = Math.sqrt(L2);
+    const nx = -dy / L;
+    const ny = dx / L;
+    const signedOff = (pt.x - cx) * nx + (pt.y - cy) * ny;
+    const faceDelta = Math.abs(Math.abs(signedOff) - wall.depth / 2);
+    if (faceDelta > FACE_TOL) return null;
+
+    return { t, faceDelta };
   }
 
   function analyze(state) {
     if (!state || !state.walls) return [];
     const infos = state.walls.map(wallGeom);
-    return infos.map((inf, i) => {
-      const res = {
-        idx: i,
-        startContains: false, endContains: false,
-        startInset:    0,     endInset:    0,   // positive = recess, negative = extend
-        startNeighborIdx: -1, endNeighborIdx: -1,
-        startNeighborDepth: 0, endNeighborDepth: 0,
-      };
-      const cS = findConnection(i, { x: inf.sx, y: inf.sy }, infos);
-      if (cS) {
-        const nb = infos[cS.j];
-        res.startNeighborIdx   = cS.j;
-        res.startNeighborDepth = nb.depth;
-        if (cS.type === "side" || cS.j < i) {
-          res.startInset = nb.depth / 2;        // butt into neighbor
-        } else {
-          res.startInset    = -nb.depth / 2;    // contain — extend rect past centerline
-          res.startContains = true;
+
+    // Output keeps legacy fields (startInset/endInset/startBlock/endBlock)
+    // pinned at 0 so any older renderer reading them is harmless.  The only
+    // live signal is intersectionStudsAt on the through wall.
+    const out = infos.map((inf) => ({
+      idx: inf.idx,
+      startInset: 0, endInset: 0,
+      startBlock: 0, endBlock: 0,
+      intersectionStudsAt: [],
+    }));
+
+    for (let i = 0; i < infos.length; i++) {
+      const a = infos[i];
+      const endpoints = [
+        { x: a.sx, y: a.sy, isStart: true },
+        { x: a.ex, y: a.ey, isStart: false },
+      ];
+
+      for (const ep of endpoints) {
+        let best = null;
+        for (let j = 0; j < infos.length; j++) {
+          if (j === i) continue;
+          const hit = endpointFaceHit(ep, infos[j]);
+          if (!hit) continue;
+          if (!best || hit.faceDelta < best.hit.faceDelta) best = { j, hit };
         }
+        if (!best) continue;
+        // The wall whose face is contacted (j) gets an intersection stud
+        // marker at the contact location.  plan.js / svg_export.js decide
+        // whether to draw a mid-span pair or a single corner-inside stud.
+        pushUnique(out[best.j].intersectionStudsAt, best.hit.t, 0.02);
       }
-      const cE = findConnection(i, { x: inf.ex, y: inf.ey }, infos);
-      if (cE) {
-        const nb = infos[cE.j];
-        res.endNeighborIdx   = cE.j;
-        res.endNeighborDepth = nb.depth;
-        if (cE.type === "side" || cE.j < i) {
-          res.endInset = nb.depth / 2;
-        } else {
-          res.endInset    = -nb.depth / 2;
-          res.endContains = true;
-        }
-      }
-      return res;
-    });
+    }
+
+    return out;
   }
 
   global.Corners = { analyze };

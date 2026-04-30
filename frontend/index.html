@@ -76,9 +76,43 @@
             <option value="24">24&quot;</option>
           </select>
         </div>
+        <div class="row">
+          <label>Window Shim Side</label>
+          <input id="windowShimSide" class="measure" value="1/2&quot;" title="Per-side shim/install allowance used to compute RO from unit width">
+        </div>
+        <div class="row">
+          <label>Window Shim Top</label>
+          <input id="windowShimTop" class="measure" value="1/2&quot;" title="Top shim/install allowance used to compute RO from unit height">
+        </div>
+        <div class="row">
+          <label>Window Shim Bottom</label>
+          <input id="windowShimBottom" class="measure" value="1/2&quot;" title="Bottom shim/install allowance used to compute RO from unit height">
+        </div>
+        <div class="row">
+          <label>Outside Image</label>
+          <input id="inpWallImage" type="file" accept="image/jpeg,image/jpg,image/png,image/webp">
+        </div>
+        <div class="row">
+          <label></label>
+          <div>
+            <button id="btnClearWallImage" class="btn">Clear Image</button>
+            <div id="wallImageMeta" class="muted" style="margin-top:4px;">No image</div>
+          </div>
+        </div>
+        <div class="row">
+          <label>View Shift Y</label>
+          <div>
+            <input id="rngWallImageOffsetY" type="range" min="-100" max="100" value="0" step="1" style="width:140px;">
+            <span id="lblWallImageOffsetY" class="muted">0%</span>
+          </div>
+        </div>
 
         <h4 class="subhead" data-collapse="grpPlates" data-default="collapsed">Plates &amp; Clearance</h4>
         <div class="group-body" id="grpPlates">
+          <div class="row">
+            <label>Load Bearing</label>
+            <label class="cb-label" title="Wall carries load from above (roof, floor, or ceiling). Requires larger headers."><input type="checkbox" id="cbLoadBearing"> Yes</label>
+          </div>
           <div class="row">
             <label>Top Plates</label>
             <select id="selTopPlates"><option>1</option><option selected>2</option></select>
@@ -98,7 +132,8 @@
           <div class="row">
             <label>Roof Shape</label>
             <select id="selRoofStyle">
-              <option value="flat" selected>Flat</option>
+              <option value="none" selected>None (open top)</option>
+              <option value="flat">Flat</option>
               <option value="slope">Single Slope</option>
             </select>
           </div>
@@ -156,6 +191,7 @@
         <div class="btn-row">
           <button id="btnAddDoor" class="btn">+ Door</button>
           <button id="btnAddWindow" class="btn">+ Window</button>
+          <button id="btnAddBuck" class="btn">+ Buck</button>
         </div>
       </div>
     </section>
@@ -167,11 +203,15 @@
         <div id="selEditor" class="hidden">
           <div class="row">
             <label>Type</label>
-            <select id="selType"><option value="door">Door</option><option value="window">Window</option></select>
+            <select id="selType"><option value="door">Door</option><option value="window">Window</option><option value="buck">Buck</option></select>
           </div>
           <div class="row">
             <label>From Left</label>
             <input id="selLeft" class="measure">
+          </div>
+          <div class="row">
+            <label>Center Line</label>
+            <input id="selCenter" class="measure" title="On-center position from left end of wall (From Left + Width ÷ 2). Enter O.C. distance to auto-update From Left.">
           </div>
           <div class="row">
             <label>Rough Width</label>
@@ -180,6 +220,18 @@
           <div class="row">
             <label>Rough Height</label>
             <input id="selHeight" class="measure">
+          </div>
+          <div class="row" id="rowUseUnitSizing">
+            <label>Use Unit Size</label>
+            <label class="cb-label" title="Auto-calculate rough opening from window unit size plus wall shim allowances."><input type="checkbox" id="selUseUnitSizing"> Yes</label>
+          </div>
+          <div class="row" id="rowUnitWidth">
+            <label>Unit Width</label>
+            <input id="selUnitWidth" class="measure">
+          </div>
+          <div class="row" id="rowUnitHeight">
+            <label>Unit Height</label>
+            <input id="selUnitHeight" class="measure">
           </div>
 
           <h4 class="subhead" data-collapse="grpOpAdv" data-default="collapsed">Advanced</h4>
@@ -221,7 +273,10 @@
       <button id="btnShowPlan" class="btn" title="Open overhead plan view">Plan View</button>
     </div>
     <div class="canvas-header">
-      <div id="statusLine" class="status">—</div>
+      <div class="status-wrap">
+        <div id="statusLine" class="status">—</div>
+        <div id="autosaveIndicator" class="autosave-indicator" aria-live="polite"></div>
+      </div>
       <div class="view-controls">
         <label><input type="checkbox" id="cbShowDims" checked> Dimensions</label>
         <label><input type="checkbox" id="cbShowLabels" checked> Labels</label>
@@ -339,27 +394,132 @@
 
 <div id="modalCalc" class="modal hidden no-print">
   <div class="modal-card calc-card">
-    <div class="modal-head">Ft / In Calculator <button class="x" data-close>×</button></div>
+    <div class="modal-head">Carpenter's Calculator <button class="x" data-close>×</button></div>
     <div class="modal-body">
-      <div class="calc-display">
-        <input id="calcA" class="measure" placeholder="e.g. 8' 6 1/2&quot;">
-        <select id="calcOp">
-          <option value="+">+</option>
-          <option value="-">−</option>
-          <option value="*">×</option>
-          <option value="/">÷</option>
-        </select>
-        <input id="calcB" class="measure" placeholder="e.g. 3' 4&quot;">
-        <button id="calcEq" class="btn primary">=</button>
+      <!-- Tabs -->
+      <div class="calc-tabs">
+        <button class="calc-tab active" data-tab="arithmetic">Arithmetic</button>
+        <button class="calc-tab" data-tab="convert">Convert</button>
+        <button class="calc-tab" data-tab="oc">O.C. / Layout</button>
+        <button class="calc-tab" data-tab="rise">Rise &amp; Run</button>
+        <button class="calc-tab" data-tab="board">Board Feet</button>
       </div>
-      <div class="calc-result">
-        <div>Result:</div>
-        <div id="calcResultFtIn" class="big">—</div>
-        <div id="calcResultIn" class="muted">—</div>
+
+      <!-- Arithmetic -->
+      <div class="calc-pane" id="calcPane-arithmetic">
+        <div class="calc-display">
+          <input id="calcA" class="measure" placeholder="e.g. 8' 6 1/2&quot;">
+          <select id="calcOp">
+            <option value="+">+</option>
+            <option value="-">−</option>
+            <option value="*">×</option>
+            <option value="/">÷</option>
+          </select>
+          <input id="calcB" class="measure" placeholder="e.g. 3' 4&quot;">
+          <button id="calcEq" class="btn primary">=</button>
+        </div>
+        <div class="calc-result">
+          <div>Result:</div>
+          <div id="calcResultFtIn" class="big">—</div>
+          <div id="calcResultIn" class="muted">—</div>
+        </div>
+        <div class="calc-help muted">
+          Accepts: <code>8'</code>, <code>8' 6&quot;</code>, <code>8' 6 1/2&quot;</code>,
+          <code>8-6</code>, <code>102.5</code>, <code>102 1/2&quot;</code>, etc.
+        </div>
       </div>
-      <div class="calc-help muted">
-        Accepts: <code>8'</code>, <code>8' 6&quot;</code>, <code>8' 6 1/2&quot;</code>,
-        <code>8-6</code>, <code>102.5</code>, <code>102 1/2&quot;</code>, etc.
+
+      <!-- Convert -->
+      <div class="calc-pane hidden" id="calcPane-convert">
+        <div class="row">
+          <label>Value</label>
+          <input id="cvInput" class="measure" placeholder="e.g. 8' 6&quot; or 102.5">
+        </div>
+        <div class="btn-row" style="flex-wrap:wrap; margin-bottom:10px;">
+          <button id="cvFtToIn" class="btn" title="Express feet+inches value as total inches">→ Total Inches</button>
+          <button id="cvInToFt" class="btn" title="Express decimal inches as feet and inches">→ Ft &amp; In</button>
+          <button id="cvToDecIn" class="btn" title="Show exact decimal inch value">→ Decimal In</button>
+          <button id="cvToFrac" class="btn" title="Show nearest 1/16-inch fraction">→ Fraction 1/16"</button>
+        </div>
+        <div class="calc-result">
+          <div id="cvResult" class="big">—</div>
+          <div id="cvResult2" class="muted">—</div>
+        </div>
+        <div class="calc-help muted">
+          Enter any measurement above, then tap a button to convert it.
+        </div>
+      </div>
+
+      <!-- O.C. / Layout -->
+      <div class="calc-pane hidden" id="calcPane-oc">
+        <h4 class="calc-section-head">Opening Center-Line → From Left</h4>
+        <div class="calc-help muted" style="margin-bottom:8px;">
+          Enter the on-center distance and the rough opening width to find where the
+          left edge of the opening sits (From Left = O.C. − Width ÷ 2).
+        </div>
+        <div class="row"><label>Opening O.C.</label><input id="ocCenter" class="measure" placeholder="Center from left wall end"></div>
+        <div class="row"><label>Opening Width (RO)</label><input id="ocWidth" class="measure" placeholder="Rough opening width"></div>
+        <div class="btn-row" style="margin-bottom:10px;">
+          <button id="ocCalc" class="btn primary">Calculate Left Edge →</button>
+        </div>
+        <div class="calc-result">
+          <div style="font-size:12px;color:#666;">From Left (left edge of opening):</div>
+          <div id="ocResult" class="big">—</div>
+          <div id="ocResult2" class="muted">—</div>
+        </div>
+
+        <h4 class="calc-section-head">Stud Layout</h4>
+        <div class="row"><label>Wall Length</label><input id="layoutLen" class="measure" placeholder="e.g. 12'"></div>
+        <div class="row"><label>Spacing O.C.</label>
+          <select id="layoutSpacing">
+            <option value="12">12&quot; O.C.</option>
+            <option value="16" selected>16&quot; O.C.</option>
+            <option value="19.2">19.2&quot; O.C.</option>
+            <option value="24">24&quot; O.C.</option>
+          </select>
+        </div>
+        <div class="row"><label>First Stud From Left</label><input id="layoutFirst" class="measure" placeholder="e.g. 0 or 15 1/4&quot;"></div>
+        <div class="btn-row" style="margin-bottom:8px;">
+          <button id="layoutCalc" class="btn primary">Show Layout</button>
+        </div>
+        <div id="layoutResult" class="calc-layout-result">—</div>
+      </div>
+
+      <!-- Rise & Run -->
+      <div class="calc-pane hidden" id="calcPane-rise">
+        <div class="calc-help muted" style="margin-bottom:8px;">Enter any two values; the third is calculated automatically.</div>
+        <div class="row"><label>Rise</label><input id="rrRise" class="measure" placeholder="e.g. 4&quot; or 3' 6&quot;"></div>
+        <div class="row"><label>Run</label><input id="rrRun" class="measure" placeholder="e.g. 12&quot; or 10'"></div>
+        <div class="row"><label>Pitch (in/12)</label><input id="rrPitch" type="number" min="0" max="24" step="0.25" placeholder="e.g. 4 (= 4:12)"></div>
+        <div class="btn-row" style="margin-bottom:10px;">
+          <button id="rrCalc" class="btn primary">Calculate</button>
+          <button id="rrClear" class="btn">Clear</button>
+        </div>
+        <div class="calc-result">
+          <div class="row"><label>Rise:</label><span id="rrOutRise">—</span></div>
+          <div class="row"><label>Run:</label><span id="rrOutRun">—</span></div>
+          <div class="row"><label>Pitch:</label><span id="rrOutPitch">—</span></div>
+          <div class="row"><label>Rafter Length:</label><span id="rrOutRafter">—</span></div>
+          <div class="row"><label>Angle:</label><span id="rrOutAngle">—</span></div>
+        </div>
+      </div>
+
+      <!-- Board Feet -->
+      <div class="calc-pane hidden" id="calcPane-board">
+        <div class="calc-help muted" style="margin-bottom:8px;">
+          Board feet = (thickness &times; width &times; length) &divide; 144. Use actual (dressed) dimensions.
+        </div>
+        <div class="row"><label>Thickness (in)</label><input id="bfThick" type="number" min="0.25" step="0.25" value="1.5" placeholder="e.g. 1.5"></div>
+        <div class="row"><label>Width (in)</label><input id="bfWidth" type="number" min="1" step="0.25" value="3.5" placeholder="e.g. 3.5"></div>
+        <div class="row"><label>Length</label><input id="bfLen" class="measure" placeholder="e.g. 8' or 96&quot;"></div>
+        <div class="row"><label>Quantity</label><input id="bfQty" type="number" min="1" step="1" value="1"></div>
+        <div class="btn-row" style="margin-bottom:10px;">
+          <button id="bfCalc" class="btn primary">Calculate</button>
+        </div>
+        <div class="calc-result">
+          <div id="bfResult" class="big">—</div>
+          <div id="bfResult2" class="muted">—</div>
+        </div>
       </div>
     </div>
   </div>
@@ -410,7 +570,7 @@
         <canvas id="planCanvas" width="900" height="600"></canvas>
         <div class="plan-zoom-bar">
           <button class="btn" id="btnPlanZoomOut">−</button>
-          <input id="rngPlanZoom" type="range" min="10" max="200" value="40">
+          <input id="rngPlanZoom" type="range" min="5" max="2000" value="40">
           <button class="btn" id="btnPlanZoomIn">+</button>
           <span id="planZoomLabel">40%</span>
           <button class="btn" id="btnPlanFit">Fit</button>

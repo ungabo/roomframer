@@ -492,6 +492,7 @@
       ctx.clearRect(0, 0, cvs.width, cvs.height);
       const segs = this.segments();
       this.cornerInfo = (typeof Corners !== "undefined") ? Corners.analyze(this.state) : [];
+      this.structureCenter = this.computeStructureCenter(segs);
 
       // Draw walls as thick lines
       for (const s of segs) {
@@ -548,6 +549,31 @@
       }
     },
 
+    computeStructureCenter(segs) {
+      if (!segs || !segs.length) return { x: 0, y: 0 };
+      let sx = 0;
+      let sy = 0;
+      let n = 0;
+      for (const seg of segs) {
+        sx += seg.x0 + seg.x1;
+        sy += seg.y0 + seg.y1;
+        n += 2;
+      }
+      return { x: sx / Math.max(1, n), y: sy / Math.max(1, n) };
+    },
+
+    exteriorSignForSegment(seg) {
+      const c = this.structureCenter || { x: 0, y: 0 };
+      const mx = (seg.x0 + seg.x1) / 2;
+      const my = (seg.y0 + seg.y1) / 2;
+      const nx = -Math.sin(seg.rad);
+      const ny = Math.cos(seg.rad);
+      const vx = mx - c.x;
+      const vy = my - c.y;
+      const dot = nx * vx + ny * vy;
+      return dot >= 0 ? 1 : -1;
+    },
+
     drawWallSegment(ctx, seg, flags) {
       const active = flags.active;
       const hover  = flags.hover;
@@ -558,6 +584,7 @@
       const wallLen     = seg.len * this.zoom;
       const wallColor   = active ? "#1f6fb4" : (hover ? "#444" : "#222");
       const openings    = this.openingSpans(seg.w);
+      const outsideSign = this.exteriorSignForSegment(seg);
 
       // Real-construction model: a wall is drawn at exactly its entered
       // length, end-to-end.  No wall extends past its own end.  When another
@@ -582,8 +609,10 @@
       ctx.fillRect(pxLocalStart, -half, pxRectW, pxThickness);
 
       // ── 2. Framing members in section ────────────────────────────────────
+      let framingMembers = [];
       if (typeof Framing !== "undefined") {
         const fr = Framing.compute({ wall: seg.w.wall, openings: seg.w.openings || [] });
+        framingMembers = fr.members || [];
         for (const m of fr.members) {
           if (m.ghost) continue;
           if (!["stud", "king", "jack", "cripple_above", "cripple_below"].includes(m.kind)) continue;
@@ -602,41 +631,34 @@
 
       // ── 2b. Intersection stud pairs where another wall butts into this one ─
       // Mid-span T intersections use a pair straddling the contact line.
-      // L-corner intersections (contact already shifted inward by butt wall's
-      // half-depth so the butt wall caps the corner) use a single nailer
-      // stud whose outer face is flush with the butt wall's inner face,
-      // forming a standard 4-stud corner (end king + gap + drywall backer).
+      // L-corner intersections use a perpendicular corner member next to the
+      // end king plus one additional inside stud.
       const T = (seg.w.wall.studThickIn || 1.5) * this.zoom;
-      const studThickIn = seg.w.wall.studThickIn || 1.5;
-      const halfIn = depth / 2;       // through wall's half-depth (== butt's, common case)
-      for (const tAlong of (c.intersectionStudsAt || [])) {
-        const cx = tAlong * seg.len * this.zoom;
-        const distFromStart = tAlong * seg.len;
-        const distFromEnd   = (1 - tAlong) * seg.len;
-        // Treat as L-corner when the contact is within the butt-wall depth
-        // of either end (this is exactly where the snap clamps it).
-        const cornerZone = halfIn + 0.5;
-        // For L-corners anchor the backer to the wall END (absolute), not to
-        // the contact point.  Framing.compute() always places end kings at
-        // x=0 and x=W-T; the backer must touch the king with no gap:
-        //   near-start: backer left edge = studThickIn  (right of start king)
-        //   near-end:   backer left edge = W - 2*T      (left of end king)
-        // Mid-span T: a pair straddling the contact line (contact-relative).
-        let rxValues;
-        if (distFromStart < cornerZone) {
-          rxValues = [studThickIn * this.zoom];
-        } else if (distFromEnd < cornerZone) {
-          rxValues = [(seg.len - 2 * studThickIn) * this.zoom];
-        } else {
-          rxValues = [cx - T, cx];   // mid-T pair: left stud then right stud
-        }
-        for (const rx of rxValues) {
-          if (rx < pxLocalStart - 0.5 || rx + T > pxLocalEnd + 0.5) continue;
+      const depthPx = depth * this.zoom;
+      const intersectionMembers = (typeof Corners !== "undefined" && typeof Corners.intersectionMembersForWall === "function")
+        ? Corners.intersectionMembersForWall(seg.w.wall, c, framingMembers)
+        : [];
+      for (const member of intersectionMembers) {
+        const rect = member.orientation === "perp"
+          ? {
+              x: member.x * this.zoom,
+              w: member.w * this.zoom,
+              y: member.faceSign >= 0 ? (half - T) : -half,
+              h: T,
+            }
+          : {
+              x: member.x * this.zoom,
+              w: member.w * this.zoom,
+              y: -half,
+              h: depthPx,
+            };
+        for (const r of [rect]) {
+          if (r.x < pxLocalStart - 0.5 || r.x + r.w > pxLocalEnd + 0.5) continue;
           ctx.fillStyle = "#c8845a";
-          ctx.fillRect(rx, -half, T, pxThickness);
+          ctx.fillRect(r.x, r.y, r.w, r.h);
           ctx.strokeStyle = "rgba(0,0,0,0.25)";
           ctx.lineWidth = 0.5;
-          ctx.strokeRect(rx, -half, T, pxThickness);
+          ctx.strokeRect(r.x, r.y, r.w, r.h);
         }
       }
 
@@ -703,26 +725,31 @@
           ctx.setLineDash([4, 3]);
           ctx.strokeStyle = "#777";
           ctx.lineWidth   = 1;
+          const clDimY = outsideSign * (half + OPENING_DIM_OFFSET_PX + 24);
+          const clTopY = Math.min(-half - 14, clDimY);
+          const clBotY = Math.max(half + 14, clDimY);
           ctx.beginPath();
           ctx.moveTo(xc, -half - 14);
-          ctx.lineTo(xc, half + OPENING_DIM_OFFSET_PX + 24);
+          ctx.lineTo(xc, clTopY);
+          ctx.moveTo(xc, clTopY);
+          ctx.lineTo(xc, clBotY);
           ctx.stroke();
           ctx.restore();
           ctx.fillStyle = "#555";
           ctx.font = "9px system-ui, Arial";
           ctx.textAlign = "center";
-          ctx.textBaseline = "bottom";
-          ctx.fillText("C/L", xc, -half - 6);
+          ctx.textBaseline = outsideSign > 0 ? "top" : "bottom";
+          ctx.fillText("C/L", xc, outsideSign > 0 ? (half + 8) : (-half - 8));
         }
 
         // RO callout (size label) below wall
         ctx.fillStyle = "#333";
         ctx.font = "9px system-ui, Arial";
         ctx.textAlign = "center";
-        ctx.textBaseline = "top";
+        ctx.textBaseline = outsideSign > 0 ? "top" : "bottom";
         ctx.fillText(
           `RO ${Units.formatShort(op.width, this.state.unitsMode)} x ${Units.formatShort(op.height, this.state.unitsMode)}`,
-          xc, half + 18
+          xc, outsideSign * (half + 18)
         );
       }
 
@@ -774,16 +801,17 @@
           ctx.fill();
         }
 
-        this.drawOpeningDimensions(ctx, seg, openings, pxThickness);
-        if (this.showCenterlineDims) this.drawCenterlineDimensions(ctx, seg, openings, pxThickness);
+        this.drawOpeningDimensions(ctx, seg, openings, pxThickness, outsideSign);
+        if (this.showCenterlineDims) this.drawCenterlineDimensions(ctx, seg, openings, pxThickness, outsideSign);
       }
 
       ctx.restore();
     },
 
-    drawOpeningDimensions(ctx, seg, openings, pxThickness) {
+    drawOpeningDimensions(ctx, seg, openings, pxThickness, outsideSign) {
       if (!openings.length) return;
-      const y = pxThickness / 2 + OPENING_DIM_OFFSET_PX;
+      const side = outsideSign >= 0 ? 1 : -1;
+      const y = side * (pxThickness / 2 + OPENING_DIM_OFFSET_PX);
       const cuts = [0];
       for (const op of openings) {
         cuts.push(op.left, op.right);
@@ -799,9 +827,11 @@
 
       for (const cut of cuts) {
         const x = cut * this.zoom;
+        const extFrom = side * (pxThickness / 2 + 2);
+        const extTo = y + side * 5;
         ctx.beginPath();
-        ctx.moveTo(x, pxThickness / 2 + 2);
-        ctx.lineTo(x, y + 5);
+        ctx.moveTo(x, extFrom);
+        ctx.lineTo(x, extTo);
         ctx.stroke();
       }
 
@@ -814,9 +844,10 @@
       }
     },
 
-    drawCenterlineDimensions(ctx, seg, openings, pxThickness) {
+    drawCenterlineDimensions(ctx, seg, openings, pxThickness, outsideSign) {
       if (!openings.length) return;
-      const y = pxThickness / 2 + OPENING_DIM_OFFSET_PX + 18;
+      const side = outsideSign >= 0 ? 1 : -1;
+      const y = side * (pxThickness / 2 + OPENING_DIM_OFFSET_PX + 18);
       const cuts = [0, ...openings.map((op) => op.center), seg.len];
       ctx.strokeStyle = "#5b5b5b";
       ctx.fillStyle = "#2f2f2f";
@@ -828,8 +859,8 @@
       for (const cut of cuts) {
         const x = cut * this.zoom;
         ctx.beginPath();
-        ctx.moveTo(x, y - 5);
-        ctx.lineTo(x, y + 5);
+        ctx.moveTo(x, y - side * 5);
+        ctx.lineTo(x, y + side * 5);
         ctx.stroke();
       }
       for (let i = 0; i < cuts.length - 1; i++) {
@@ -859,13 +890,14 @@
   }
 
   PlanView.drawLocalDim = function (ctx, x1, x2, y, label) {
+    const side = y >= 0 ? 1 : -1;
     ctx.beginPath();
     ctx.moveTo(x1, y);
     ctx.lineTo(x2, y);
     ctx.stroke();
     drawTick(ctx, x1, y);
     drawTick(ctx, x2, y);
-    ctx.fillText(label, (x1 + x2) / 2, y - 3);
+    ctx.fillText(label, (x1 + x2) / 2, y - side * 3);
     ctx.fillStyle = "#666";
     drawArrowHead(ctx, x1, y, 1);
     drawArrowHead(ctx, x2, y, -1);

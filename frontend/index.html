@@ -44,6 +44,13 @@
 <main class="layout no-print">
   <!-- LEFT: wall + opening properties -->
   <aside class="panel left">
+    <section class="group view-mode-group">
+      <div class="view-mode-tabs" role="tablist" aria-label="View Mode">
+        <button id="tabFrontView" class="view-mode-tab active" type="button" role="tab" aria-selected="true">Front View</button>
+        <button id="tabPlanView" class="view-mode-tab" type="button" role="tab" aria-selected="false">Plan View</button>
+      </div>
+    </section>
+
     <section class="group">
       <h3 data-collapse="grpWall">Wall</h3>
       <div class="group-body" id="grpWall">
@@ -270,8 +277,6 @@
       <button id="btnRenameWall" class="btn" type="button" title="Rename the active wall">Rename</button>
       <button id="btnDupWall" class="btn" title="Duplicate the active wall">Duplicate</button>
       <button id="btnDelWall" class="btn danger" title="Delete the active wall">Delete Wall</button>
-      <span class="sep"></span>
-      <button id="btnShowPlan" class="btn" title="Open overhead plan view">Plan View</button>
     </div>
     <div class="canvas-header">
       <div class="status-wrap">
@@ -285,16 +290,53 @@
         <label><input type="checkbox" id="cbColorCode" checked> Color Code</label>
       </div>
     </div>
-    <div id="canvasScroll" class="canvas-scroll">
-      <canvas id="wallCanvas" width="1400" height="700"></canvas>
+    <div id="frontViewPane" class="view-pane">
+      <div id="canvasScroll" class="canvas-scroll">
+        <canvas id="wallCanvas" width="1400" height="700"></canvas>
+      </div>
+      <div class="zoom-bar">
+        <button class="btn" id="btnZoomOut">−</button>
+        <input id="rngZoom" type="range" min="20" max="200" value="60">
+        <button class="btn" id="btnZoomIn">+</button>
+        <span id="zoomLabel">60%</span>
+        <span class="sep"></span>
+        <button class="btn" id="btnFit">Fit</button>
+      </div>
     </div>
-    <div class="zoom-bar">
-      <button class="btn" id="btnZoomOut">−</button>
-      <input id="rngZoom" type="range" min="20" max="200" value="60">
-      <button class="btn" id="btnZoomIn">+</button>
-      <span id="zoomLabel">60%</span>
-      <span class="sep"></span>
-      <button class="btn" id="btnFit">Fit</button>
+
+    <div id="planViewPane" class="view-pane hidden">
+      <div class="plan-toolbar-inline">
+        <label><input type="checkbox" id="cbPlanSnap" checked> Snap 1"</label>
+        <label><input type="checkbox" id="cbPlanDims" checked> Measurements</label>
+        <label><input type="checkbox" id="cbPlanCL" checked> C/L Dims</label>
+        <button id="btnPlanAutoArrange" class="btn">Auto Arrange (Rect)</button>
+        <button id="btnPlanExportSvg" class="btn">Export SVG</button>
+        <button id="btnPlanPrint" class="btn">Print Plan</button>
+      </div>
+      <div class="plan-body inline-plan-body">
+        <div class="plan-side">
+          <h4>Walls in Project</h4>
+          <ul id="planWallList" class="plan-wall-list"></ul>
+          <div class="muted" style="font-size:11px;line-height:1.4;">
+            Drag walls to move.  Hold <b>Shift</b> to rotate around the wall's
+            center in 15° increments.  Endpoints snap to neighboring walls
+            (green marker shows the snap target).  Double-click a wall to
+            focus it in Front View.
+          </div>
+        </div>
+        <div class="plan-canvas-wrap">
+          <canvas id="planCanvas" width="900" height="600"></canvas>
+          <div class="plan-zoom-bar">
+            <button class="btn" id="btnPlanZoomOut">−</button>
+            <input id="rngPlanZoom" type="range" min="5" max="2000" value="40">
+            <button class="btn" id="btnPlanZoomIn">+</button>
+            <span id="planZoomLabel">40%</span>
+            <button class="btn" id="btnPlanFit">Fit</button>
+            <span class="sep"></span>
+            <span id="planStatus" class="muted"></span>
+          </div>
+        </div>
+      </div>
     </div>
   </section>
 
@@ -542,47 +584,6 @@
   </div>
 </div>
 
-<div id="modalPlan" class="modal modal-wide hidden no-print">
-  <div class="modal-card plan-card">
-    <div class="modal-head">
-      Overhead Plan View
-      <div class="plan-toolbar">
-        <label><input type="checkbox" id="cbPlanSnap" checked> Snap 1"</label>
-        <label><input type="checkbox" id="cbPlanDims" checked> Measurements</label>
-        <label><input type="checkbox" id="cbPlanCL" checked> C/L Dims</label>
-        <button id="btnPlanAutoArrange" class="btn">Auto Arrange (Rect)</button>
-        <button id="btnPlanExportSvg" class="btn">Export SVG</button>
-        <button id="btnPlanPrint" class="btn">Print Plan</button>
-        <button class="x" data-close>×</button>
-      </div>
-    </div>
-    <div class="modal-body plan-body">
-      <div class="plan-side">
-        <h4>Walls in Project</h4>
-        <ul id="planWallList" class="plan-wall-list"></ul>
-        <div class="muted" style="font-size:11px;line-height:1.4;">
-          Drag walls to move.  Hold <b>Shift</b> to rotate around the wall's
-          center in 15° increments.  Endpoints snap to neighboring walls
-          (green marker shows the snap target).  Double-click a wall to
-          edit it in the elevation view.
-        </div>
-      </div>
-      <div class="plan-canvas-wrap">
-        <canvas id="planCanvas" width="900" height="600"></canvas>
-        <div class="plan-zoom-bar">
-          <button class="btn" id="btnPlanZoomOut">−</button>
-          <input id="rngPlanZoom" type="range" min="5" max="2000" value="40">
-          <button class="btn" id="btnPlanZoomIn">+</button>
-          <span id="planZoomLabel">40%</span>
-          <button class="btn" id="btnPlanFit">Fit</button>
-          <span class="sep"></span>
-          <span id="planStatus" class="muted"></span>
-        </div>
-      </div>
-    </div>
-  </div>
-</div>
-
 <!-- Scripts (load order matters) -->
 <script src="/static/js/units.js"></script>
 <script src="/static/js/calculator.js"></script>
@@ -593,8 +594,8 @@
 <script src="/static/js/plan.js"></script>
 <script src="/static/js/svg_export.js"></script>
 <script src="/static/js/api.js"></script>
-<script src="/static/js/state.js?v=20260501a"></script>
+<script src="/static/js/state.js?v=20260501b"></script>
 <script src="/static/js/advisor.js"></script>
-<script src="/static/js/app.js?v=20260501a"></script>
+<script src="/static/js/app.js?v=20260501b"></script>
 </body>
 </html>

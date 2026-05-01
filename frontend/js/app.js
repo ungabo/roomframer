@@ -11,6 +11,8 @@
   let autosaveIndicatorTimer = null;
   let suppressAutosave = true;
   let lastSavedDocJson = null;
+  let planViewInitialized = false;
+  let planViewShownOnce = false;
 
   const AUTOSAVE_DELAY_MS = 500;
   const WALL_IMAGE_MAX_WIDTH = 1200;
@@ -49,14 +51,16 @@
       syncWallInputsFromState();
       populateWallTabs();
       populatePlanWallList();
+      updateViewModeUI(State.get().currentViewMode || "front");
       refreshInspector();
       refreshSummary();
       WallView.render();
-      if (!$("modalPlan").classList.contains("hidden")) PlanView.render();
+      if ((State.get().currentViewMode || "front") === "plan" && planViewShownOnce) PlanView.render();
       scheduleAutosave();
     });
 
     bindToolbar();
+    bindViewModeTabs();
     bindWallInputs();
     bindViewToggles();
     bindInspector();
@@ -97,10 +101,13 @@
 
     // Plan view init
     PlanView.init($("planCanvas"), {
-      setActive: (idx) => State.setActiveWall(idx),
-      closeAndFocusElevation: () => $("modalPlan").classList.add("hidden"),
+      setActive: (idx) => State.setActiveWall(idx, "plan"),
+      closeAndFocusElevation: () => switchViewMode("front"),
     });
+    planViewInitialized = true;
     bindPlanView();
+
+    updateViewModeUI(State.get().currentViewMode || "front");
   });
 
   // -------------------- UI bindings --------------------
@@ -163,8 +170,6 @@
         State.removeWall(s.activeWallIdx);
       }
     };
-    $("btnShowPlan").onclick = openPlanView;
-
     $("selUnits").onchange = () => {
       State.set({ unitsMode: $("selUnits").value });
     };
@@ -446,6 +451,51 @@
       scroll.scrollLeft = Math.max(0, ratioX * newWidth - (e.clientX - scrollRect.left));
       scroll.scrollTop = Math.max(0, ratioY * newHeight - (e.clientY - scrollRect.top));
     }, { passive: false });
+  }
+
+  function bindViewModeTabs() {
+    const front = $("tabFrontView");
+    const plan = $("tabPlanView");
+    if (front) front.onclick = () => switchViewMode("front");
+    if (plan) plan.onclick = () => switchViewMode("plan");
+  }
+
+  function updateViewModeUI(mode) {
+    const front = mode !== "plan";
+    $("frontViewPane").classList.toggle("hidden", !front);
+    $("planViewPane").classList.toggle("hidden", front);
+    const frontTab = $("tabFrontView");
+    const planTab = $("tabPlanView");
+    if (frontTab) {
+      frontTab.classList.toggle("active", front);
+      frontTab.setAttribute("aria-selected", front ? "true" : "false");
+    }
+    if (planTab) {
+      planTab.classList.toggle("active", !front);
+      planTab.setAttribute("aria-selected", !front ? "true" : "false");
+    }
+  }
+
+  function switchViewMode(mode) {
+    if (mode !== "front" && mode !== "plan") return;
+    const s = State.get();
+    if (s.currentViewMode !== mode) State.setViewMode(mode);
+    updateViewModeUI(mode);
+    if (mode === "plan") {
+      if (planViewInitialized) {
+        if (!planViewShownOnce) {
+          PlanView.show(State.get());
+          planViewShownOnce = true;
+        } else {
+          PlanView.state = State.get();
+          PlanView.resize();
+          PlanView.render();
+        }
+        populatePlanWallList();
+      }
+      return;
+    }
+    WallView.render();
   }
 
   function bindInspector() {
@@ -1241,16 +1291,7 @@
     });
   }
 
-  function openPlanView() {
-    const modal = $("modalPlan");
-    modal.classList.remove("hidden");
-    PlanView.show(State.get());
-    populatePlanWallList();
-  }
-
   function bindPlanView() {
-    document.querySelectorAll("#modalPlan [data-close]").forEach(el =>
-      el.addEventListener("click", () => $("modalPlan").classList.add("hidden")));
     $("rngPlanZoom").addEventListener("input", () => {
       const pct = parseInt($("rngPlanZoom").value, 10);
       PlanView.setZoom(pct / 100);

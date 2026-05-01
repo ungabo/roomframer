@@ -5,8 +5,9 @@
  *  - The only valid connection is "end of wall A meets a face of wall B".
  *  - When that happens, the wall whose FACE is contacted (the "through wall")
  *    gets one or more extra nailer studs at the contact location:
- *      * Mid-span T: a pair of studs on the through wall straddling the
- *        contact line so the butt wall's end stud nests between them.
+ *      * Mid-span T: a perpendicular backer centered on the contact line,
+ *        with studs on both sides of it. Existing studs can satisfy either
+ *        side if they already land in the required slots.
  *      * L corner (contact within ~5% of either end of the through wall):
  *        a single nailer stud on the inside of the through wall's end stud.
  *  - The butt wall's end stud is NEVER suppressed.  Both walls keep their
@@ -18,7 +19,7 @@
  * Output per wall index i:
  *   {
  *     idx,
- *     intersectionStudsAt: [t, ...]   // 0..1 along through-wall axis
+ *     intersectionStudsAt: [{ t, faceSign }, ...]   // 0..1 along through-wall axis
  *   }
  */
 (function (global) {
@@ -40,8 +41,10 @@
     return { idx, w, depth, len, sx, sy, ex, ey };
   }
 
-  function pushUnique(arr, v, tol) {
-    if (!arr.some((x) => Math.abs(x - v) <= tol)) arr.push(v);
+  function pushUniqueIntersection(arr, marker, tol) {
+    if (!arr.some((x) => Math.abs(x.t - marker.t) <= tol && x.faceSign === marker.faceSign)) {
+      arr.push(marker);
+    }
   }
 
   function stableWallToken(info) {
@@ -70,7 +73,7 @@
   }
 
   // Does the point `pt` (an endpoint of another wall) lie on one of `wall`'s
-  // long faces (within FACE_TOL)?  Returns { t, faceDelta } if so.
+  // long faces (within FACE_TOL)?  Returns { t, faceDelta, faceSign } if so.
   function endpointFaceHit(pt, wall) {
     const dx = wall.ex - wall.sx;
     const dy = wall.ey - wall.sy;
@@ -90,14 +93,129 @@
     const signedOff = (pt.x - cx) * nx + (pt.y - cy) * ny;
     const faceDelta = Math.abs(Math.abs(signedOff) - wall.depth / 2);
     if (faceDelta > FACE_TOL) return null;
+    const faceSign = signedOff >= 0 ? 1 : -1;
 
-    return { t, tRaw, faceDelta, projOvershoot };
+    return { t, tRaw, faceDelta, projOvershoot, faceSign };
   }
 
   function endpointPoint(info, useStart) {
     return useStart
       ? { x: info.sx, y: info.sy }
       : { x: info.ex, y: info.ey };
+  }
+
+  function overlapsRange(ax, aw, bx, bw, tol) {
+    return (ax + aw) > (bx + tol) && ax < (bx + bw - tol);
+  }
+
+  function listVerticalMembers(framingMembers) {
+    const kinds = new Set(["stud", "king", "jack", "cripple_above", "cripple_below"]);
+    return (framingMembers || [])
+      .filter((member) => kinds.has(member.kind) && typeof member.x === "number" && typeof member.w === "number")
+      .map((member) => ({ x: member.x, w: member.w }))
+      .sort((a, b) => a.x - b.x);
+  }
+
+  function studOccupiesSlot(studs, x, w) {
+    return studs.some((stud) => overlapsRange(x, w, stud.x, stud.w, 0.01));
+  }
+
+  function chooseMidLayout(studs, cx, studThickIn, studDepthIn, wallLengthIn) {
+    const seen = new Set();
+    const candidates = [];
+
+    function addCandidate(perpX) {
+      const key = perpX.toFixed(3);
+      if (seen.has(key)) return;
+      seen.add(key);
+
+      const leftX = perpX - studThickIn;
+      const rightX = perpX + studDepthIn;
+      if (perpX < -1e-6 || perpX + studDepthIn > wallLengthIn + 1e-6) return;
+      if (leftX < -1e-6 || rightX + studThickIn > wallLengthIn + 1e-6) return;
+      if (cx < perpX - 0.01 || cx > perpX + studDepthIn + 0.01) return;
+
+      let perpCollisions = 0;
+      for (const stud of studs) {
+        if (overlapsRange(perpX, studDepthIn, stud.x, stud.w, 0.01)) perpCollisions += 1;
+      }
+
+      const leftPresent = studOccupiesSlot(studs, leftX, studThickIn);
+      const rightPresent = studOccupiesSlot(studs, rightX, studThickIn);
+      candidates.push({
+        perpX,
+        leftX,
+        rightX,
+        leftPresent,
+        rightPresent,
+        addedCount: (leftPresent ? 0 : 1) + (rightPresent ? 0 : 1),
+        perpCollisions,
+        centerMiss: Math.abs((perpX + studDepthIn / 2) - cx),
+      });
+    }
+
+    addCandidate(cx - (studDepthIn / 2));
+    for (const stud of studs) {
+      addCandidate(stud.x + stud.w);
+      addCandidate(stud.x - studDepthIn);
+    }
+
+    if (!candidates.length) return null;
+
+    candidates.sort((a, b) => (
+      a.perpCollisions - b.perpCollisions
+      || a.addedCount - b.addedCount
+      || a.centerMiss - b.centerMiss
+      || a.perpX - b.perpX
+    ));
+
+    return candidates[0] || null;
+  }
+
+  function pushUniqueMember(arr, member) {
+    if (!arr.some((x) => x.orientation === member.orientation
+      && x.faceSign === member.faceSign
+      && Math.abs(x.x - member.x) <= 0.01
+      && Math.abs(x.w - member.w) <= 0.01)) {
+      arr.push(member);
+    }
+  }
+
+  function intersectionMembersForWall(wall, cornerInfo, framingMembers) {
+    if (!wall || !cornerInfo) return [];
+    const markers = cornerInfo.intersectionStudsAt || [];
+    const wallLengthIn = wall.lengthIn || 0;
+    const studThickIn = wall.studThickIn || 1.5;
+    const studDepthIn = wall.studDepthIn || 3.5;
+    const cornerZone = (studDepthIn / 2) + 0.5;
+    const studs = listVerticalMembers(framingMembers);
+    const out = [];
+
+    for (const marker of markers) {
+      const tAlong = typeof marker === "number" ? marker : marker.t;
+      const faceSign = typeof marker === "number" ? -1 : marker.faceSign;
+      const distFromStart = tAlong * wallLengthIn;
+      const distFromEnd = (1 - tAlong) * wallLengthIn;
+
+      if (distFromStart < cornerZone) {
+        pushUniqueMember(out, { orientation: "perp", x: studThickIn, w: studDepthIn, faceSign });
+        pushUniqueMember(out, { orientation: "parallel", x: studThickIn + studDepthIn, w: studThickIn, faceSign });
+        continue;
+      }
+      if (distFromEnd < cornerZone) {
+        pushUniqueMember(out, { orientation: "perp", x: wallLengthIn - studThickIn - studDepthIn, w: studDepthIn, faceSign });
+        pushUniqueMember(out, { orientation: "parallel", x: wallLengthIn - (2 * studThickIn) - studDepthIn, w: studThickIn, faceSign });
+        continue;
+      }
+
+      const layout = chooseMidLayout(studs, tAlong * wallLengthIn, studThickIn, studDepthIn, wallLengthIn);
+      if (!layout) continue;
+      pushUniqueMember(out, { orientation: "perp", x: layout.perpX, w: studDepthIn, faceSign });
+      if (!layout.leftPresent) pushUniqueMember(out, { orientation: "parallel", x: layout.leftX, w: studThickIn, faceSign });
+      if (!layout.rightPresent) pushUniqueMember(out, { orientation: "parallel", x: layout.rightX, w: studThickIn, faceSign });
+    }
+
+    return out.sort((a, b) => a.x - b.x || a.w - b.w);
   }
 
   function analyze(state) {
@@ -156,12 +274,15 @@
         // The wall whose face is contacted (j) gets an intersection stud
         // marker at the contact location.  plan.js / svg_export.js decide
         // whether to draw a mid-span pair or a single corner-inside stud.
-        pushUnique(out[best.j].intersectionStudsAt, best.hit.t, 0.02);
+        pushUniqueIntersection(out[best.j].intersectionStudsAt, {
+          t: best.hit.t,
+          faceSign: best.hit.faceSign,
+        }, 0.02);
       }
     }
 
     return out;
   }
 
-  global.Corners = { analyze };
+  global.Corners = { analyze, intersectionMembersForWall };
 })(typeof window !== "undefined" ? window : globalThis);

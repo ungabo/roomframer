@@ -75,6 +75,11 @@
     const mode = s.unitsMode;
     const framing = Framing.compute({ wall: s.wall, openings: s.openings });
     this._computed = framing;
+    const cornerInfo = (typeof Corners !== "undefined" && s.walls) ? Corners.analyze(s) : [];
+    const activeCornerInfo = cornerInfo[s.activeWallIdx] || { intersectionStudsAt: [] };
+    const intersectionMembers = (typeof Corners !== "undefined" && typeof Corners.intersectionMembersForWall === "function")
+      ? buildElevationIntersectionMembers(s.wall, framing.meta, Corners.intersectionMembersForWall(s.wall, activeCornerInfo, framing.members))
+      : [];
     const openingViewImage = getOpeningViewImage(this, s);
 
     const px = this._pxScale;
@@ -129,6 +134,7 @@
     drawMembers(ctx, byKind(["bottom_plate","top_plate","top_plate_slope"]), wallToPx, s, false);
     drawMembers(ctx, byKind(["window_ghost","door_ghost","buck_ghost"]), wallToPx, s, !!openingViewImage);
     drawMembers(ctx, byKind(["stud","king","jack","cripple_above","cripple_below","sill","header","rafter_mark"]), wallToPx, s, false);
+    drawMembers(ctx, intersectionMembers, wallToPx, s, false);
     drawOpeningOutlines(ctx, framing.members, wallToPx, mode, s, openingViewImage, wallViewFrame, s.wall.viewImageOffsetY || 0);
     ctx.restore();
 
@@ -158,6 +164,27 @@
     for (let y = 0; y < canvas.height; y += step) { ctx.moveTo(0, y+0.5); ctx.lineTo(canvas.width, y+0.5); }
     ctx.stroke();
     ctx.restore();
+  }
+
+  function roofBottomAtMember(meta, x, w) {
+    if (meta.roofStyle !== "slope" || !(meta.roofPitchIn12 > 0)) return meta.tpBottom;
+    const centerX = clamp(x + w / 2, 0, meta.W);
+    const slopePerIn = meta.roofPitchIn12 / 12;
+    return meta.roofHighSide === "left"
+      ? meta.tpBottom - slopePerIn * centerX
+      : meta.tpBottom - slopePerIn * (meta.W - centerX);
+  }
+
+  function buildElevationIntersectionMembers(wall, meta, layout) {
+    const bpTop = meta.bpTop;
+    return (layout || []).map((member) => ({
+      kind: "intersection_stud",
+      x: member.x,
+      y: bpTop,
+      w: member.w,
+      h: Math.max(0, roofBottomAtMember(meta, member.x, member.w) - bpTop),
+      color: "#c8845a",
+    }));
   }
 
   function drawMembers(ctx, members, wallToPx, s, hideOpeningGhostFill) {

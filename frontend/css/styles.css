@@ -89,6 +89,27 @@ input.measure { font-variant-numeric: tabular-nums; }
 .panel.right { border-right: none; border-left: 1px solid var(--line); }
 
 .group { margin-bottom: 14px; }
+.view-mode-group { margin-bottom: 10px; }
+.view-mode-tabs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+.view-mode-tab {
+  border: 1px solid var(--line);
+  background: #f3f3ee;
+  color: #333;
+  border-radius: 6px;
+  padding: 7px 8px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.view-mode-tab.active {
+  background: var(--accent);
+  border-color: var(--accent-2);
+  color: #fff;
+}
 .group h3 {
   margin: 4px 0 6px; font-size: 12px; letter-spacing: .5px;
   color: #555; text-transform: uppercase;
@@ -135,6 +156,12 @@ input.measure { font-variant-numeric: tabular-nums; }
 .canvas-wrap {
   display: flex; flex-direction: column;
   background: #e9e9e2;
+}
+.view-pane {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 .canvas-header {
   display: flex; justify-content: space-between; align-items: center;
@@ -279,18 +306,15 @@ canvas#wallCanvas { background: #fff; box-shadow: 0 1px 6px rgba(0,0,0,.15); dis
 .wall-tab.active { background: var(--accent); color: #fff; border-color: var(--accent-2); }
 .wall-tabs-bar .sep { width: 1px; height: 22px; background: var(--line); margin: 0 6px; }
 
-/* Plan-view modal */
-.modal.modal-wide { align-items: stretch; justify-content: stretch; padding: 24px; }
-.modal-card.plan-card {
-  display: flex; flex-direction: column;
-  width: 100%; max-width: 100%; height: 100%;
-}
-.plan-toolbar {
+/* Plan view (inline) */
+.plan-toolbar-inline {
   display: flex; align-items: center; gap: 10px; margin-left: auto;
   font-size: 12px;
+  padding: 8px 10px;
+  background: #fff;
+  border-bottom: 1px solid var(--line);
 }
-.plan-toolbar .btn { background: #33404f; color: #fff; border-color: #4a5566; }
-.plan-body { flex: 1; display: grid; grid-template-columns: 220px 1fr; overflow: hidden; padding: 0; }
+.inline-plan-body { flex: 1; display: grid; grid-template-columns: 220px 1fr; overflow: hidden; padding: 0; min-height: 0; }
 .plan-side {
   padding: 10px; overflow: auto;
   background: #f7f7f2; border-right: 1px solid var(--line);

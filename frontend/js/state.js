@@ -63,6 +63,8 @@
       projectName: "Untitled Project",
       unitsMode: "ftin",
       walls: [first],
+      currentViewMode: "front",
+      activeWallByView: { front: 0, plan: 0 },
       activeWallIdx: 0,
       selectedIdx: -1,
       showDims: true,
@@ -84,8 +86,17 @@
   let _pendingCommitEmit = false;
 
   function syncProxies() {
+    if (!_state.activeWallByView || typeof _state.activeWallByView !== "object") {
+      _state.activeWallByView = { front: _state.activeWallIdx || 0, plan: _state.activeWallIdx || 0 };
+    }
+    if (_state.currentViewMode !== "front" && _state.currentViewMode !== "plan") {
+      _state.currentViewMode = "front";
+    }
+    const maxIdx = Math.max(0, _state.walls.length - 1);
+    _state.activeWallByView.front = Math.max(0, Math.min(maxIdx, _state.activeWallByView.front || 0));
+    _state.activeWallByView.plan = Math.max(0, Math.min(maxIdx, _state.activeWallByView.plan || 0));
     if (_state.activeWallIdx < 0 || _state.activeWallIdx >= _state.walls.length) {
-      _state.activeWallIdx = 0;
+      _state.activeWallIdx = _state.activeWallByView[_state.currentViewMode] || 0;
     }
     const aw = _state.walls[_state.activeWallIdx];
     if (!aw) return;
@@ -176,7 +187,9 @@
       pushHistory();
       const w = newWall(name || `Wall ${_state.walls.length + 1}`);
       _state.walls.push(w);
-      _state.activeWallIdx = _state.walls.length - 1;
+      const nextIdx = _state.walls.length - 1;
+      _state.activeWallByView[_state.currentViewMode] = nextIdx;
+      _state.activeWallIdx = nextIdx;
       _state.selectedIdx = -1;
       emit();
       return w;
@@ -191,7 +204,9 @@
       copy.openings = copy.openings.map((o) => ({ ...o, id: "op" + Math.random().toString(36).slice(2, 8) }));
       copy.plan = { x: (src.plan?.x || 0), y: (src.plan?.y || 0) + 60, rotationDeg: src.plan?.rotationDeg || 0 };
       _state.walls.push(copy);
-      _state.activeWallIdx = _state.walls.length - 1;
+      const nextIdx = _state.walls.length - 1;
+      _state.activeWallByView[_state.currentViewMode] = nextIdx;
+      _state.activeWallIdx = nextIdx;
       _state.selectedIdx = -1;
       emit();
     },
@@ -200,15 +215,25 @@
       if (idx < 0 || idx >= _state.walls.length) return;
       pushHistory();
       _state.walls.splice(idx, 1);
-      if (_state.activeWallIdx >= _state.walls.length) {
-        _state.activeWallIdx = _state.walls.length - 1;
-      }
+      const fix = (v) => Math.max(0, Math.min(_state.walls.length - 1, v >= idx ? v - 1 : v));
+      _state.activeWallByView.front = fix(_state.activeWallByView.front || 0);
+      _state.activeWallByView.plan = fix(_state.activeWallByView.plan || 0);
+      _state.activeWallIdx = _state.activeWallByView[_state.currentViewMode] || 0;
       _state.selectedIdx = -1;
       emit();
     },
-    setActiveWall(idx) {
+    setActiveWall(idx, viewMode) {
       if (idx < 0 || idx >= _state.walls.length) return;
+      const mode = (viewMode === "front" || viewMode === "plan") ? viewMode : _state.currentViewMode;
+      _state.activeWallByView[mode] = idx;
       _state.activeWallIdx = idx;
+      _state.selectedIdx = -1;
+      emit();
+    },
+    setViewMode(mode) {
+      if (mode !== "front" && mode !== "plan") return;
+      _state.currentViewMode = mode;
+      _state.activeWallIdx = _state.activeWallByView[mode] || 0;
       _state.selectedIdx = -1;
       emit();
     },
@@ -281,6 +306,11 @@
           showLabels: _state.showLabels,
           showGrid: _state.showGrid,
           colorCode: _state.colorCode,
+          currentViewMode: _state.currentViewMode,
+          activeWallByView: {
+            front: _state.activeWallByView.front,
+            plan: _state.activeWallByView.plan,
+          },
         },
         history: {
           undo: undoStack.slice(-HISTORY_LIMIT),
@@ -321,10 +351,19 @@
         walls = [first];
       }
       _state.walls = walls;
-      _state.activeWallIdx = Math.min(Math.max(0, data.activeWallIdx || 0), walls.length - 1);
+      const v = data.view || {};
+      const fallbackIdx = Math.min(Math.max(0, data.activeWallIdx || 0), walls.length - 1);
+      const savedByView = v.activeWallByView || {};
+      _state.activeWallByView = {
+        front: Math.min(Math.max(0, Number.isFinite(savedByView.front) ? savedByView.front : fallbackIdx), walls.length - 1),
+        plan: Math.min(Math.max(0, Number.isFinite(savedByView.plan) ? savedByView.plan : fallbackIdx), walls.length - 1),
+      };
+      _state.currentViewMode = (v.currentViewMode === "front" || v.currentViewMode === "plan")
+        ? v.currentViewMode
+        : "front";
+      _state.activeWallIdx = _state.activeWallByView[_state.currentViewMode];
       _state.selectedIdx = -1;
 
-      const v = data.view || {};
       _state.showDims   = v.showDims  !== false;
       _state.showLabels = v.showLabels !== false;
       _state.showGrid   = !!v.showGrid;

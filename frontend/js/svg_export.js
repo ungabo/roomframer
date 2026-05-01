@@ -19,6 +19,11 @@
     const s = state;
     const wall = s.wall;
     const framing = Framing.compute({ wall, openings: s.openings });
+    const cornerInfo = (typeof global.Corners !== "undefined" && s.walls) ? global.Corners.analyze(s) : [];
+    const activeCornerInfo = cornerInfo[s.activeWallIdx] || { intersectionStudsAt: [] };
+    const elevationIntersectionMembers = (typeof global.Corners !== "undefined" && typeof global.Corners.intersectionMembersForWall === "function")
+      ? buildElevationIntersectionMembers(wall, framing.meta, global.Corners.intersectionMembersForWall(wall, activeCornerInfo, framing.members))
+      : [];
     const meta = framing.meta;
     const px = 4; // 4 svg units per inch at export (high fidelity)
 
@@ -96,6 +101,9 @@
     out.push(`<g clip-path="url(#${clipId})">`);
     for (const m of framing.members) {
       if (insideKinds.has(m.kind)) out.push(memberSvg(m));
+    }
+    for (const m of elevationIntersectionMembers) {
+      out.push(memberSvg(m));
     }
     out.push(`</g>`);
 
@@ -246,8 +254,10 @@
       out.push(`<rect x="${r(pxLocalStart)}" y="${r(-halfPx)}" width="${r(pxRectW)}" height="${r(depth * px)}" fill="#ede8e0"/>`);
 
       // ── 2. Studs in section ──────────────────────────────────────────────
+      let framingMembers = [];
       if (typeof Framing !== "undefined") {
         const fr = Framing.compute({ wall: seg.w.wall, openings: seg.w.openings || [] });
+        framingMembers = fr.members || [];
         for (const m of fr.members) {
           if (m.ghost) continue;
           if (!["stud","king","jack","cripple_above","cripple_below"].includes(m.kind)) continue;
@@ -260,25 +270,26 @@
 
       // ── 2b. Intersection stud pairs (where another wall end meets this face) ─
       const studW = (seg.w.wall.studThickIn || 1.5) * px;
-      const studThickIn = seg.w.wall.studThickIn || 1.5;
-      const halfIn = depth / 2;
-      for (const tAlong of (c.intersectionStudsAt || [])) {
-        const cx = tAlong * seg.len * px;
-        const distFromStart = tAlong * seg.len;
-        const distFromEnd   = (1 - tAlong) * seg.len;
-        const cornerZone = halfIn + 0.5;
-        let rxValues;
-        if (distFromStart < cornerZone) {
-          rxValues = [studThickIn * px];
-        } else if (distFromEnd < cornerZone) {
-          rxValues = [(seg.len - 2 * studThickIn) * px];
-        } else {
-          rxValues = [cx - studW, cx];
-        }
-        for (const rx of rxValues) {
-          if (rx < pxLocalStart - 0.5 || rx + studW > pxLocalEnd + 0.5) continue;
-          out.push(`<rect x="${r(rx)}" y="${r(-halfPx)}" width="${r(studW)}" height="${r(depth * px)}" fill="#c8845a" stroke="rgba(0,0,0,0.2)" stroke-width="0.4"/>`);
-        }
+      const depthPx = depth * px;
+      const intersectionMembers = (typeof Corners !== "undefined" && typeof Corners.intersectionMembersForWall === "function")
+        ? Corners.intersectionMembersForWall(seg.w.wall, c, framingMembers)
+        : [];
+      for (const member of intersectionMembers) {
+        const rect = member.orientation === "perp"
+          ? {
+              x: member.x * px,
+              w: member.w * px,
+              y: member.faceSign >= 0 ? (halfPx - studW) : -halfPx,
+              h: studW,
+            }
+          : {
+              x: member.x * px,
+              w: member.w * px,
+              y: -halfPx,
+              h: depthPx,
+            };
+        if (rect.x < pxLocalStart - 0.5 || rect.x + rect.w > pxLocalEnd + 0.5) continue;
+        out.push(`<rect x="${r(rect.x)}" y="${r(rect.y)}" width="${r(rect.w)}" height="${r(rect.h)}" fill="#c8845a" stroke="rgba(0,0,0,0.2)" stroke-width="0.4"/>`);
       }
 
       // ── 3. Openings ──────────────────────────────────────────────────────
@@ -359,6 +370,27 @@
 
     out.push(`</svg>`);
     return out.join("\n");
+  }
+
+  function roofBottomAtMember(meta, x, w) {
+    if (meta.roofStyle !== "slope" || !(meta.roofPitchIn12 > 0)) return meta.tpBottom;
+    const centerX = Math.max(0, Math.min(meta.W, x + w / 2));
+    const slopePerIn = meta.roofPitchIn12 / 12;
+    return meta.roofHighSide === "left"
+      ? meta.tpBottom - slopePerIn * centerX
+      : meta.tpBottom - slopePerIn * (meta.W - centerX);
+  }
+
+  function buildElevationIntersectionMembers(wall, meta, layout) {
+    const bpTop = meta.bpTop;
+    return (layout || []).map((member) => ({
+      kind: "intersection_stud",
+      x: member.x,
+      y: bpTop,
+      w: member.w,
+      h: Math.max(0, roofBottomAtMember(meta, member.x, member.w) - bpTop),
+      color: "#c8845a",
+    }));
   }
 
   function r(v) { return Math.round(v * 100) / 100; }

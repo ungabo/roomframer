@@ -354,6 +354,12 @@ canvas#wallCanvas { background: #fff; box-shadow: 0 1px 6px rgba(0,0,0,.15); dis
 .plan-controls-body .btn {
   width: 100%;
 }
+.plan-tips {
+  font-size: 12px;
+  color: #3f3f3b;
+  display: grid;
+  gap: 5px;
+}
 .plan-side {
   padding: 10px; overflow: auto;
   background: #f7f7f2; border-right: 1px solid var(--line);

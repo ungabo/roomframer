@@ -1,5 +1,8 @@
 # Local environment files
 .env
 .env.local
+node_modules/
+package.json
+package-lock.json
 data/
 frontend/plan_export_test.svg

@@ -61,7 +61,7 @@ def register(payload: RegisterIn, request: Request, response: Response):
         seed_default_presets(conn, user_id)
         token = create_session(conn, user_id)
         row = conn.execute(
-            "SELECT id, email, created_at FROM users WHERE id=?",
+            "SELECT id, email, created_at, is_admin FROM users WHERE id=?",
             (user_id,),
         ).fetchone()
     set_session_cookie(response, request, token)
@@ -72,7 +72,7 @@ def register(payload: RegisterIn, request: Request, response: Response):
 def login(payload: LoginIn, request: Request, response: Response):
     with get_conn() as conn:
         row = conn.execute(
-            "SELECT id, email, password_salt, password_hash, created_at FROM users WHERE lower(email)=lower(?)",
+            "SELECT id, email, password_salt, password_hash, created_at, is_admin FROM users WHERE lower(email)=lower(?)",
             (payload.email.strip().lower(),),
         ).fetchone()
         if not row or not verify_password(payload.password, row["password_salt"], row["password_hash"]):
@@ -83,6 +83,7 @@ def login(payload: LoginIn, request: Request, response: Response):
         "id": row["id"],
         "email": row["email"],
         "created_at": row["created_at"],
+        "is_admin": bool(row["is_admin"]),
     }
 
 
@@ -100,10 +101,15 @@ def logout(request: Request, response: Response):
 @router.get("/projects", response_model=list[ProjectSummary])
 def list_projects(user: dict = Depends(require_current_user)):
     with get_conn() as conn:
-        rows = conn.execute(
-            "SELECT id, name, units_mode, updated_at FROM projects WHERE user_id=? ORDER BY updated_at DESC",
-            (user["id"],),
-        ).fetchall()
+        if user.get("is_admin"):
+            rows = conn.execute(
+                "SELECT id, name, units_mode, updated_at FROM projects ORDER BY updated_at DESC",
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT id, name, units_mode, updated_at FROM projects WHERE user_id=? ORDER BY updated_at DESC",
+                (user["id"],),
+            ).fetchall()
     return [dict(r) for r in rows]
 
 
@@ -127,10 +133,16 @@ def create_project(payload: ProjectIn, user: dict = Depends(require_current_user
 @router.get("/projects/{pid}", response_model=ProjectOut)
 def get_project(pid: int, user: dict = Depends(require_current_user)):
     with get_conn() as conn:
-        row = conn.execute(
-            "SELECT id, name, units_mode, data_json, created_at, updated_at FROM projects WHERE id=? AND user_id=?",
-            (pid, user["id"]),
-        ).fetchone()
+        if user.get("is_admin"):
+            row = conn.execute(
+                "SELECT id, name, units_mode, data_json, created_at, updated_at FROM projects WHERE id=?",
+                (pid,),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                "SELECT id, name, units_mode, data_json, created_at, updated_at FROM projects WHERE id=? AND user_id=?",
+                (pid, user["id"]),
+            ).fetchone()
     if not row:
         raise HTTPException(404, "Project not found")
     d = dict(row)
@@ -141,18 +153,32 @@ def get_project(pid: int, user: dict = Depends(require_current_user)):
 @router.put("/projects/{pid}", response_model=ProjectOut)
 def update_project(pid: int, payload: ProjectIn, user: dict = Depends(require_current_user)):
     with get_conn() as conn:
-        cur = conn.execute(
-            """UPDATE projects
-                  SET name=?, units_mode=?, data_json=?, updated_at=datetime('now')
-                WHERE id=? AND user_id=?""",
-            (payload.name, payload.units_mode, json.dumps(payload.data), pid, user["id"]),
-        )
+        if user.get("is_admin"):
+            cur = conn.execute(
+                """UPDATE projects
+                      SET name=?, units_mode=?, data_json=?, updated_at=datetime('now')
+                    WHERE id=?""",
+                (payload.name, payload.units_mode, json.dumps(payload.data), pid),
+            )
+        else:
+            cur = conn.execute(
+                """UPDATE projects
+                      SET name=?, units_mode=?, data_json=?, updated_at=datetime('now')
+                    WHERE id=? AND user_id=?""",
+                (payload.name, payload.units_mode, json.dumps(payload.data), pid, user["id"]),
+            )
         if cur.rowcount == 0:
             raise HTTPException(404, "Project not found")
-        row = conn.execute(
-            "SELECT id, name, units_mode, data_json, created_at, updated_at FROM projects WHERE id=? AND user_id=?",
-            (pid, user["id"]),
-        ).fetchone()
+        if user.get("is_admin"):
+            row = conn.execute(
+                "SELECT id, name, units_mode, data_json, created_at, updated_at FROM projects WHERE id=?",
+                (pid,),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                "SELECT id, name, units_mode, data_json, created_at, updated_at FROM projects WHERE id=? AND user_id=?",
+                (pid, user["id"]),
+            ).fetchone()
     d = dict(row)
     d["data"] = json.loads(d.pop("data_json"))
     return d
@@ -161,7 +187,10 @@ def update_project(pid: int, payload: ProjectIn, user: dict = Depends(require_cu
 @router.delete("/projects/{pid}")
 def delete_project(pid: int, user: dict = Depends(require_current_user)):
     with get_conn() as conn:
-        cur = conn.execute("DELETE FROM projects WHERE id=? AND user_id=?", (pid, user["id"]))
+        if user.get("is_admin"):
+            cur = conn.execute("DELETE FROM projects WHERE id=?", (pid,))
+        else:
+            cur = conn.execute("DELETE FROM projects WHERE id=? AND user_id=?", (pid, user["id"]))
     if cur.rowcount == 0:
         raise HTTPException(404, "Project not found")
     return {"ok": True}

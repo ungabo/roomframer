@@ -212,12 +212,18 @@
       _state.selectedIdx = -1;
       emit();
     },
-    renameActiveWall(name) {
-      const w = _state.walls[_state.activeWallIdx];
-      if (!w) return;
-      w.name = name || w.name;
+    renameWall(idx, name) {
+      if (idx < 0 || idx >= _state.walls.length) return;
+      const w = _state.walls[idx];
+      const next = (name || "").trim();
+      if (!w || !next || w.name === next) return;
+      pushHistory();
+      w.name = next;
       markDirty();
       emit();
+    },
+    renameActiveWall(name) {
+      State.renameWall(_state.activeWallIdx, name);
     },
     updateWallPlan(idx, patch) {
       const w = _state.walls[idx];

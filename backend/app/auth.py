@@ -50,7 +50,7 @@ def delete_session(conn: sqlite3.Connection, token: str) -> None:
 
 def _load_session_user(conn: sqlite3.Connection, token: str, refresh: bool) -> sqlite3.Row | None:
     row = conn.execute(
-                """SELECT u.id, u.email, u.created_at, s.id AS session_id
+                                """SELECT u.id, u.email, u.created_at, u.is_admin, s.id AS session_id
              FROM sessions s
              JOIN users u ON u.id = s.user_id
             WHERE s.token_hash=?
@@ -77,6 +77,7 @@ def optional_current_user(request: Request) -> dict | None:
         "id": row["id"],
         "email": row["email"],
         "created_at": row["created_at"],
+        "is_admin": bool(row["is_admin"]),
     }
 
 

@@ -347,6 +347,12 @@
       const startEp = endpoints.find((ep) => ep.endKind === "start") || endpoints[0];
       const rotDeg = moving && moving.plan ? (moving.plan.rotationDeg || 0) : 0;
 
+      // Moving wall's face-normal (for computing its own end-king corners).
+      const mRad = -rotDeg * Math.PI / 180;
+      const mUx = Math.cos(mRad), mUy = Math.sin(mRad);
+      const mNx = -mUy, mNy = mUx;
+      const mHalf = (moving && moving.wall ? (moving.wall.studDepthIn || 3.5) : 3.5) / 2;
+
       const tryCandidate = (ep, tx, ty) => {
         const d = Math.hypot(ep.x - tx, ep.y - ty);
         if (d >= bestD) return;
@@ -364,20 +370,50 @@
 
       for (const s of segs) {
         if (s.idx === movingIdx) continue;
-        const depth = s.w.wall.studDepthIn || 3.5;
+        const sDepth = s.w.wall.studDepthIn || 3.5;
+        const sThick = s.w.wall.studThickIn || 1.5;
         const dx = s.x1 - s.x0, dy = s.y1 - s.y0;
         const L = Math.sqrt(dx*dx + dy*dy); if (L < 1e-6) continue;
-        const ux = dx / L, uy = dy / L;
-        const nx = -uy,    ny = ux;
-        const half = depth / 2;
+        const sNx = -dy / L, sNy = dx / L;
+        const sHalf = sDepth / 2;
 
+        // ── Corner-to-corner snap (L-corners from any orientation) ──────────
+        // Neighbor's 4 end-king outer corners in world space.
+        const nCorners = [
+          { x: s.x0 + sNx * sHalf, y: s.y0 + sNy * sHalf },  // start, face+
+          { x: s.x0 - sNx * sHalf, y: s.y0 - sNy * sHalf },  // start, face-
+          { x: s.x1 + sNx * sHalf, y: s.y1 + sNy * sHalf },  // end,   face+
+          { x: s.x1 - sNx * sHalf, y: s.y1 - sNy * sHalf },  // end,   face-
+        ];
+
+        for (const ep of endpoints) {
+          // Moving wall's 2 outer corners for this endpoint.
+          const mCorners = [
+            { x: ep.x + mNx * mHalf, y: ep.y + mNy * mHalf },   // face+
+            { x: ep.x - mNx * mHalf, y: ep.y - mNy * mHalf },   // face-
+          ];
+          for (const mc of mCorners) {
+            const offX = mc.x - ep.x, offY = mc.y - ep.y;
+            for (const nc of nCorners) {
+              // Translate the moving wall so mc lands on nc.
+              tryCandidate(ep, nc.x - offX, nc.y - offY);
+            }
+          }
+        }
+
+        // ── Face-projection snap (mid-span T only) ───────────────────────────
+        // Only fires when the contact is far enough from either end that no
+        // corner-to-corner alignment applies there.
         for (const ep of endpoints) {
           const tRaw = ((ep.x - s.x0) * dx + (ep.y - s.y0) * dy) / (L * L);
           if (tRaw < -0.08 || tRaw > 1.08) continue;
           const t = Math.max(0, Math.min(1, tRaw));
+          const distFromStart = t * s.len;
+          const distFromEnd   = (1 - t) * s.len;
+          if (distFromStart < mHalf + sThick || distFromEnd < mHalf + sThick) continue;
           const cx = s.x0 + t * dx, cy = s.y0 + t * dy;
           for (const sign of [1, -1]) {
-            tryCandidate(ep, cx + nx * half * sign, cy + ny * half * sign);
+            tryCandidate(ep, cx + sNx * sHalf * sign, cy + sNy * sHalf * sign);
           }
         }
       }
@@ -566,26 +602,35 @@
 
       // ── 2b. Intersection stud pairs where another wall butts into this one ─
       // Mid-span T intersections use a pair straddling the contact line.
-      // End/corner intersections use a single added stud on the INSIDE of
-      // the end stud (never in the outside extension zone).
+      // L-corner intersections (contact already shifted inward by butt wall's
+      // half-depth so the butt wall caps the corner) use a single nailer
+      // stud whose outer face is flush with the butt wall's inner face,
+      // forming a standard 4-stud corner (end king + gap + drywall backer).
       const T = (seg.w.wall.studThickIn || 1.5) * this.zoom;
       const studThickIn = seg.w.wall.studThickIn || 1.5;
+      const halfIn = depth / 2;       // through wall's half-depth (== butt's, common case)
       for (const tAlong of (c.intersectionStudsAt || [])) {
         const cx = tAlong * seg.len * this.zoom;
         const distFromStart = tAlong * seg.len;
         const distFromEnd   = (1 - tAlong) * seg.len;
-        // Use absolute distance: if the contact is so close to the end
-        // that a stud pair won't fit before the end king, draw a single
-        // nailer stud just inside the end king (this is the L-corner
-        // case).  Otherwise draw a pair straddling the contact line
-        // (mid-span T).
-        const cornerZone = studThickIn + 0.5;
-        let offsets;
-        if (distFromStart < cornerZone)      offsets = [T];
-        else if (distFromEnd < cornerZone)   offsets = [-2 * T];
-        else                                 offsets = [-T, 0];
-        for (const offset of offsets) {
-          const rx = cx + offset;
+        // Treat as L-corner when the contact is within the butt-wall depth
+        // of either end (this is exactly where the snap clamps it).
+        const cornerZone = halfIn + 0.5;
+        // For L-corners anchor the backer to the wall END (absolute), not to
+        // the contact point.  Framing.compute() always places end kings at
+        // x=0 and x=W-T; the backer must touch the king with no gap:
+        //   near-start: backer left edge = studThickIn  (right of start king)
+        //   near-end:   backer left edge = W - 2*T      (left of end king)
+        // Mid-span T: a pair straddling the contact line (contact-relative).
+        let rxValues;
+        if (distFromStart < cornerZone) {
+          rxValues = [studThickIn * this.zoom];
+        } else if (distFromEnd < cornerZone) {
+          rxValues = [(seg.len - 2 * studThickIn) * this.zoom];
+        } else {
+          rxValues = [cx - T, cx];   // mid-T pair: left stud then right stud
+        }
+        for (const rx of rxValues) {
           if (rx < pxLocalStart - 0.5 || rx + T > pxLocalEnd + 0.5) continue;
           ctx.fillStyle = "#c8845a";
           ctx.fillRect(rx, -half, T, pxThickness);

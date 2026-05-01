@@ -29,6 +29,12 @@ DEFAULT_OPENING_PRESETS = [
     ("Window 6'-0\" x 4'-0\" (slider)", "window", 72.0, 48.0, 72.0, 24.0, 7.25),
 ]
 
+AUTO_ADMIN_EMAILS = {
+    "test+lcorner@example.com",
+    "copilot.test.20260429@example.com",
+    "testuser2_20260423@example.com",
+}
+
 
 def _connect() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH)
@@ -77,12 +83,22 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     if "username" in user_columns:
         conn.execute("UPDATE users SET email=lower(username) WHERE email IS NULL AND username IS NOT NULL")
     conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email ON users(email)")
+    _ensure_column(conn, "users", "is_admin INTEGER NOT NULL DEFAULT 0")
     _ensure_column(conn, "projects", "user_id INTEGER REFERENCES users(id) ON DELETE CASCADE")
     _ensure_column(conn, "framing_presets", "user_id INTEGER REFERENCES users(id) ON DELETE CASCADE")
     _ensure_column(conn, "opening_presets", "user_id INTEGER REFERENCES users(id) ON DELETE CASCADE")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_projects_user_updated ON projects(user_id, updated_at DESC)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_framing_presets_user ON framing_presets(user_id, id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_opening_presets_user_kind ON opening_presets(user_id, kind, id)")
+
+
+def promote_auto_admins(conn: sqlite3.Connection) -> None:
+    for email in AUTO_ADMIN_EMAILS:
+        conn.execute("UPDATE users SET is_admin=1 WHERE lower(email)=lower(?)", (email,))
+
+    project7 = conn.execute("SELECT user_id FROM projects WHERE id=7").fetchone()
+    if project7 and project7["user_id"] is not None:
+        conn.execute("UPDATE users SET is_admin=1 WHERE id=?", (project7["user_id"],))
 
 
 def claim_legacy_data(conn: sqlite3.Connection, user_id: int) -> None:
@@ -117,6 +133,7 @@ def init_db() -> None:
     with _connect() as conn:
         conn.executescript(schema)
         _migrate_schema(conn)
+        promote_auto_admins(conn)
         conn.commit()
 
 

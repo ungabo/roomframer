@@ -148,6 +148,12 @@
       State.addWall();
       applyDefaultFramingPresetToActiveWall();
     };
+    const renameBtn = $("btnRenameWall");
+    if (renameBtn) {
+      renameBtn.addEventListener("click", () => {
+        promptRenameWall(State.get().activeWallIdx);
+      });
+    }
     $("btnDupWall").onclick = () => State.duplicateActiveWall();
     $("btnDelWall").onclick = () => {
       const s = State.get();
@@ -192,6 +198,25 @@
       const projectName = ($("projectName").textContent || "").trim() || "Untitled Wall";
       if (projectName !== State.get().projectName) State.setWithHistory({ projectName });
     });
+  }
+
+  function promptRenameWall(idx) {
+    const s = State.get();
+    if (!Array.isArray(s.walls) || idx < 0 || idx >= s.walls.length) return;
+    const w = s.walls[idx];
+    const nm = prompt("Rename wall:", w.name || "Wall");
+    if (!nm) return;
+    const next = nm.trim();
+    if (!next || next === w.name) return;
+    // Compatibility fallback in case an older cached state.js is loaded.
+    if (typeof State.renameWall === "function") {
+      State.renameWall(idx, next);
+      return;
+    }
+    if (typeof State.renameActiveWall === "function") {
+      State.setActiveWall(idx);
+      State.renameActiveWall(next);
+    }
   }
 
   function bindWallInputs() {
@@ -1191,10 +1216,7 @@
       tab.textContent = w.name;
       tab.title = `Click to edit ${w.name}. Double-click to rename.`;
       tab.addEventListener("click", () => State.setActiveWall(i));
-      tab.addEventListener("dblclick", () => {
-        const nm = prompt("Rename wall:", w.name);
-        if (nm && nm.trim()) State.renameActiveWall(nm.trim());
-      });
+      tab.addEventListener("dblclick", () => promptRenameWall(i));
       bar.appendChild(tab);
     });
     $("btnDelWall").disabled = s.walls.length <= 1;
@@ -1210,6 +1232,11 @@
       if (i === s.activeWallIdx) li.className = "active";
       li.innerHTML = `<span>${w.name}</span><span class="muted">${Units.formatShort(w.wall.lengthIn, s.unitsMode)}</span>`;
       li.addEventListener("click", () => State.setActiveWall(i));
+      li.addEventListener("dblclick", () => promptRenameWall(i));
+      li.addEventListener("contextmenu", (e) => {
+        e.preventDefault();
+        promptRenameWall(i);
+      });
       ul.appendChild(li);
     });
   }

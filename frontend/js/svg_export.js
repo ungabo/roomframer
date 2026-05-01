@@ -261,17 +261,21 @@
       // ── 2b. Intersection stud pairs (where another wall end meets this face) ─
       const studW = (seg.w.wall.studThickIn || 1.5) * px;
       const studThickIn = seg.w.wall.studThickIn || 1.5;
+      const halfIn = depth / 2;
       for (const tAlong of (c.intersectionStudsAt || [])) {
         const cx = tAlong * seg.len * px;
         const distFromStart = tAlong * seg.len;
         const distFromEnd   = (1 - tAlong) * seg.len;
-        const cornerZone = studThickIn + 0.5;
-        let offsets;
-        if (distFromStart < cornerZone)    offsets = [studW];
-        else if (distFromEnd < cornerZone) offsets = [-2 * studW];
-        else                               offsets = [-studW, 0];
-        for (const off of offsets) {
-          const rx = cx + off;
+        const cornerZone = halfIn + 0.5;
+        let rxValues;
+        if (distFromStart < cornerZone) {
+          rxValues = [studThickIn * px];
+        } else if (distFromEnd < cornerZone) {
+          rxValues = [(seg.len - 2 * studThickIn) * px];
+        } else {
+          rxValues = [cx - studW, cx];
+        }
+        for (const rx of rxValues) {
           if (rx < pxLocalStart - 0.5 || rx + studW > pxLocalEnd + 0.5) continue;
           out.push(`<rect x="${r(rx)}" y="${r(-halfPx)}" width="${r(studW)}" height="${r(depth * px)}" fill="#c8845a" stroke="rgba(0,0,0,0.2)" stroke-width="0.4"/>`);
         }

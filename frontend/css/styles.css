@@ -80,6 +80,9 @@ input.measure { font-variant-numeric: tabular-nums; }
   grid-template-columns: 260px 1fr 300px;
   height: calc(100vh - 44px);
 }
+.mode-plan .layout {
+  grid-template-columns: 260px 1fr;
+}
 .panel {
   background: var(--panel);
   border-right: 1px solid var(--line);
@@ -87,6 +90,7 @@ input.measure { font-variant-numeric: tabular-nums; }
   padding: 8px;
 }
 .panel.right { border-right: none; border-left: 1px solid var(--line); }
+.mode-plan #rightPanel { display: none; }
 
 .group { margin-bottom: 14px; }
 .view-mode-group { margin-bottom: 10px; }
@@ -186,6 +190,7 @@ input.measure { font-variant-numeric: tabular-nums; }
   background: #e9e9e2;
 }
 .mode-plan .wall-tabs-bar { display: none; }
+.mode-plan .canvas-header { display: none; }
 .view-pane {
   flex: 1;
   min-height: 0;

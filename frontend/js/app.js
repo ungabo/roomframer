@@ -468,10 +468,12 @@
     $("planViewPane").classList.toggle("hidden", front);
     const toggle = $("viewModeToggle");
     if (toggle) toggle.checked = !front;
+    const frontLeft = $("frontLeftPanel");
+    const planLeft = $("planLeftPanel");
+    if (frontLeft) frontLeft.classList.toggle("hidden", !front);
+    if (planLeft) planLeft.classList.toggle("hidden", front);
     const frontSidebar = $("frontSidebarPanel");
-    const planSidebar = $("planSidebarPanel");
     if (frontSidebar) frontSidebar.classList.toggle("hidden", !front);
-    if (planSidebar) planSidebar.classList.toggle("hidden", front);
     document.body.classList.toggle("mode-plan", !front);
     document.body.classList.toggle("mode-front", front);
   }

@@ -454,26 +454,26 @@
   }
 
   function bindViewModeTabs() {
-    const front = $("tabFrontView");
-    const plan = $("tabPlanView");
-    if (front) front.onclick = () => switchViewMode("front");
-    if (plan) plan.onclick = () => switchViewMode("plan");
+    const toggle = $("viewModeToggle");
+    if (toggle) {
+      toggle.addEventListener("change", () => {
+        switchViewMode(toggle.checked ? "plan" : "front");
+      });
+    }
   }
 
   function updateViewModeUI(mode) {
     const front = mode !== "plan";
     $("frontViewPane").classList.toggle("hidden", !front);
     $("planViewPane").classList.toggle("hidden", front);
-    const frontTab = $("tabFrontView");
-    const planTab = $("tabPlanView");
-    if (frontTab) {
-      frontTab.classList.toggle("active", front);
-      frontTab.setAttribute("aria-selected", front ? "true" : "false");
-    }
-    if (planTab) {
-      planTab.classList.toggle("active", !front);
-      planTab.setAttribute("aria-selected", !front ? "true" : "false");
-    }
+    const toggle = $("viewModeToggle");
+    if (toggle) toggle.checked = !front;
+    const frontSidebar = $("frontSidebarPanel");
+    const planSidebar = $("planSidebarPanel");
+    if (frontSidebar) frontSidebar.classList.toggle("hidden", !front);
+    if (planSidebar) planSidebar.classList.toggle("hidden", front);
+    document.body.classList.toggle("mode-plan", !front);
+    document.body.classList.toggle("mode-front", front);
   }
 
   function switchViewMode(mode) {

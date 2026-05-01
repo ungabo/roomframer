@@ -45,9 +45,14 @@
   <!-- LEFT: wall + opening properties -->
   <aside class="panel left">
     <section class="group view-mode-group">
-      <div class="view-mode-tabs" role="tablist" aria-label="View Mode">
-        <button id="tabFrontView" class="view-mode-tab active" type="button" role="tab" aria-selected="true">Front View</button>
-        <button id="tabPlanView" class="view-mode-tab" type="button" role="tab" aria-selected="false">Plan View</button>
+      <div class="view-mode-toggle-wrap">
+        <span class="view-mode-label">Front</span>
+        <label class="view-toggle" for="viewModeToggle" aria-label="Toggle between front and plan views">
+          <input id="viewModeToggle" type="checkbox">
+          <span class="view-toggle-track"></span>
+          <span class="view-toggle-thumb"></span>
+        </label>
+        <span class="view-mode-label">Plan</span>
       </div>
     </section>
 
@@ -305,25 +310,7 @@
     </div>
 
     <div id="planViewPane" class="view-pane hidden">
-      <div class="plan-toolbar-inline">
-        <label><input type="checkbox" id="cbPlanSnap" checked> Snap 1"</label>
-        <label><input type="checkbox" id="cbPlanDims" checked> Measurements</label>
-        <label><input type="checkbox" id="cbPlanCL" checked> C/L Dims</label>
-        <button id="btnPlanAutoArrange" class="btn">Auto Arrange (Rect)</button>
-        <button id="btnPlanExportSvg" class="btn">Export SVG</button>
-        <button id="btnPlanPrint" class="btn">Print Plan</button>
-      </div>
       <div class="plan-body inline-plan-body">
-        <div class="plan-side">
-          <h4>Walls in Project</h4>
-          <ul id="planWallList" class="plan-wall-list"></ul>
-          <div class="muted" style="font-size:11px;line-height:1.4;">
-            Drag walls to move.  Hold <b>Shift</b> to rotate around the wall's
-            center in 15° increments.  Endpoints snap to neighboring walls
-            (green marker shows the snap target).  Double-click a wall to
-            focus it in Front View.
-          </div>
-        </div>
         <div class="plan-canvas-wrap">
           <canvas id="planCanvas" width="900" height="600"></canvas>
           <div class="plan-zoom-bar">
@@ -342,6 +329,7 @@
 
   <!-- RIGHT: schedule/summary -->
   <aside class="panel right">
+    <div id="frontSidebarPanel">
     <section class="group">
       <h3 data-collapse="grpSummary">Summary</h3>
       <div class="group-body" id="grpSummary">
@@ -385,6 +373,32 @@
         <ul id="warnList" class="warnings"></ul>
       </div>
     </section>
+    </div>
+
+    <div id="planSidebarPanel" class="hidden">
+      <section class="group">
+        <h3>Plan Controls</h3>
+        <div class="group-body plan-controls-body">
+          <label><input type="checkbox" id="cbPlanSnap" checked> Snap 1"</label>
+          <label><input type="checkbox" id="cbPlanDims" checked> Measurements</label>
+          <label><input type="checkbox" id="cbPlanCL" checked> C/L Dims</label>
+          <button id="btnPlanAutoArrange" class="btn">Auto Arrange (Rect)</button>
+          <button id="btnPlanExportSvg" class="btn">Export SVG</button>
+          <button id="btnPlanPrint" class="btn">Print Plan</button>
+        </div>
+      </section>
+      <section class="group">
+        <h3>Walls in Plan</h3>
+        <div class="group-body">
+          <ul id="planWallList" class="plan-wall-list"></ul>
+          <div class="muted" style="font-size:11px;line-height:1.4;">
+            Drag walls to move. Hold <b>Shift</b> to rotate around the wall center in 15° increments.
+            Endpoints snap to neighboring walls (green marker shows the snap target).
+            Double-click a wall to focus it in Front View.
+          </div>
+        </div>
+      </section>
+    </div>
   </aside>
 </main>
 

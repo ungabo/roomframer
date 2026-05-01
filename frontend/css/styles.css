@@ -90,25 +90,53 @@ input.measure { font-variant-numeric: tabular-nums; }
 
 .group { margin-bottom: 14px; }
 .view-mode-group { margin-bottom: 10px; }
-.view-mode-tabs {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 6px;
+.view-mode-toggle-wrap {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
 }
-.view-mode-tab {
-  border: 1px solid var(--line);
-  background: #f3f3ee;
-  color: #333;
-  border-radius: 6px;
-  padding: 7px 8px;
+.view-mode-label {
   font-size: 12px;
   font-weight: 600;
-  cursor: pointer;
+  color: #4a4a46;
 }
-.view-mode-tab.active {
-  background: var(--accent);
-  border-color: var(--accent-2);
-  color: #fff;
+.view-toggle {
+  position: relative;
+  width: 62px;
+  height: 30px;
+  display: inline-block;
+}
+.view-toggle input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+.view-toggle-track {
+  position: absolute;
+  inset: 0;
+  border-radius: 999px;
+  background: linear-gradient(180deg, #d9e8ff, #bfd6ff);
+  border: 1px solid #9cb9ea;
+}
+.view-toggle-thumb {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: #fff;
+  border: 1px solid #c4cddd;
+  box-shadow: 0 1px 4px rgba(0,0,0,.2);
+  transition: transform .18s ease;
+}
+.view-toggle input:checked + .view-toggle-track {
+  background: linear-gradient(180deg, #d8f2de, #bde7c6);
+  border-color: #83c696;
+}
+.view-toggle input:checked + .view-toggle-track + .view-toggle-thumb {
+  transform: translateX(31px);
 }
 .group h3 {
   margin: 4px 0 6px; font-size: 12px; letter-spacing: .5px;
@@ -157,6 +185,7 @@ input.measure { font-variant-numeric: tabular-nums; }
   display: flex; flex-direction: column;
   background: #e9e9e2;
 }
+.mode-plan .wall-tabs-bar { display: none; }
 .view-pane {
   flex: 1;
   min-height: 0;
@@ -307,14 +336,19 @@ canvas#wallCanvas { background: #fff; box-shadow: 0 1px 6px rgba(0,0,0,.15); dis
 .wall-tabs-bar .sep { width: 1px; height: 22px; background: var(--line); margin: 0 6px; }
 
 /* Plan view (inline) */
-.plan-toolbar-inline {
-  display: flex; align-items: center; gap: 10px; margin-left: auto;
-  font-size: 12px;
-  padding: 8px 10px;
-  background: #fff;
-  border-bottom: 1px solid var(--line);
+.inline-plan-body { flex: 1; display: grid; grid-template-columns: 1fr; overflow: hidden; padding: 0; min-height: 0; }
+.plan-controls-body {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 6px;
 }
-.inline-plan-body { flex: 1; display: grid; grid-template-columns: 220px 1fr; overflow: hidden; padding: 0; min-height: 0; }
+.plan-controls-body label {
+  font-size: 12px;
+  color: #444;
+}
+.plan-controls-body .btn {
+  width: 100%;
+}
 .plan-side {
   padding: 10px; overflow: auto;
   background: #f7f7f2; border-right: 1px solid var(--line);

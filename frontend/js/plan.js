@@ -17,6 +17,99 @@
   const OPENING_MARKER_IN = 8;
   const OPENING_DIM_OFFSET_PX = 34;
 
+  function normalizedWallName(wall) {
+    return String((wall && wall.name) || "").toLowerCase();
+  }
+
+  function wallNameHints(wall) {
+    const name = normalizedWallName(wall);
+    return {
+      front: /\b(front|street|road|entry|main)\b/.test(name),
+      back: /\b(back|rear|alley)\b/.test(name),
+      left: /\bleft\b|\bside\s*a\b|\ba\s*side\b/.test(name),
+      right: /\bright\b|\bside\s*b\b|\bb\s*side\b/.test(name),
+      side: /\bside\b/.test(name),
+      street: /\b(street|road)\b/.test(name),
+    };
+  }
+
+  function permutations(arr) {
+    const out = [];
+    const used = new Array(arr.length).fill(false);
+    const path = [];
+    function rec() {
+      if (path.length === arr.length) {
+        out.push(path.slice());
+        return;
+      }
+      for (let i = 0; i < arr.length; i++) {
+        if (used[i]) continue;
+        used[i] = true;
+        path.push(arr[i]);
+        rec();
+        path.pop();
+        used[i] = false;
+      }
+    }
+    rec();
+    return out;
+  }
+
+  function chooseRectWallOrder(walls) {
+    const n = Math.min(4, walls.length);
+    const ids = Array.from({ length: n }, (_, i) => i);
+    if (!ids.length) return [];
+    if (ids.length === 1) return ids;
+
+    const lengths = walls.slice(0, n).map((w) => Number(w.wall.lengthIn) || 0);
+    const sortedByLen = ids.slice().sort((a, b) => lengths[a] - lengths[b]);
+    const lenRank = new Map(sortedByLen.map((idx, rank) => [idx, rank]));
+    const hints = new Map(ids.map((i) => [i, wallNameHints(walls[i])]));
+    const slots = ["front", "right", "back", "left"].slice(0, n);
+
+    function scoreForSlot(idx, slot) {
+      const h = hints.get(idx);
+      let s = 0;
+      if (slot === "front") {
+        if (h.front) s += 24;
+        if (h.street) s += 12;
+        if (h.back) s -= 20;
+      }
+      if (slot === "back") {
+        if (h.back) s += 24;
+        if (h.front || h.street) s -= 20;
+      }
+      if (slot === "left") {
+        if (h.left) s += 24;
+        if (h.right) s -= 16;
+        if (h.side && !h.left && !h.right) s += 8;
+      }
+      if (slot === "right") {
+        if (h.right) s += 24;
+        if (h.left) s -= 16;
+        if (h.side && !h.left && !h.right) s += 8;
+      }
+
+      if (n === 4) {
+        const rank = lenRank.get(idx) || 0; // 0 shortest .. 3 longest
+        if (slot === "front" || slot === "back") s += rank * 3;
+        if (slot === "left" || slot === "right") s += (3 - rank) * 3;
+      }
+
+      return s;
+    }
+
+    let best = null;
+    for (const p of permutations(ids)) {
+      let score = 0;
+      for (let i = 0; i < slots.length; i++) score += scoreForSlot(p[i], slots[i]);
+      // Tie-breaker for deterministic output.
+      for (let i = 0; i < p.length; i++) score -= p[i] * (0.001 * (i + 1));
+      if (!best || score > best.score) best = { perm: p.slice(), score };
+    }
+    return best ? best.perm : ids;
+  }
+
   const PlanView = {
     canvas: null,
     ctx: null,
@@ -452,25 +545,46 @@
     },
 
     autoArrangeRectangle() {
-      // Arrange up to 4 walls around a rectangle perimeter.
-      // Wall 0: bottom, Wall 1: right, Wall 2: top (reversed), Wall 3: left (reversed).
+      // Arrange walls around a rectangle using wall names + length heuristics.
+      // Slots: front (bottom), right, back (top reversed), left (reversed).
       const walls = this.state.walls;
       if (!walls.length) return;
-      const w0 = walls[0];
-      w0.plan = { x: 0, y: 0, rotationDeg: 0 };
-      if (walls[1]) walls[1].plan = { x: w0.wall.lengthIn, y: 0, rotationDeg: 90 };
-      if (walls[2]) {
-        walls[2].plan = {
-          x: w0.wall.lengthIn,
-          y: (walls[1] ? walls[1].wall.lengthIn : w0.wall.lengthIn * 0.6),
+      const order = chooseRectWallOrder(walls);
+      const frontIdx = order[0];
+      const rightIdx = order[1];
+      const backIdx = order[2];
+      const leftIdx = order[3];
+
+      const frontLen = frontIdx != null ? (walls[frontIdx].wall.lengthIn || 0) : 0;
+      const rightLen = rightIdx != null
+        ? (walls[rightIdx].wall.lengthIn || 0)
+        : Math.max(1, Math.round(frontLen * 0.6));
+
+      if (frontIdx != null) walls[frontIdx].plan = { x: 0, y: 0, rotationDeg: 0 };
+      if (rightIdx != null) walls[rightIdx].plan = { x: frontLen, y: 0, rotationDeg: 90 };
+      if (backIdx != null) {
+        walls[backIdx].plan = {
+          x: frontLen,
+          y: rightLen,
           rotationDeg: 180,
         };
       }
-      if (walls[3]) {
-        walls[3].plan = {
+      if (leftIdx != null) {
+        walls[leftIdx].plan = {
           x: 0,
-          y: (walls[1] ? walls[1].wall.lengthIn : w0.wall.lengthIn * 0.6),
+          y: rightLen,
           rotationDeg: 270,
+        };
+      }
+
+      // If more than 4 walls exist, keep extras near the rectangle center as a best guess.
+      for (let i = 4; i < order.length; i++) {
+        const idx = order[i];
+        const ring = i - 3;
+        walls[idx].plan = {
+          x: frontLen / 2 + ring * 12,
+          y: rightLen / 2 + ring * 12,
+          rotationDeg: (i % 2) ? 0 : 90,
         };
       }
       State.commitWallPlan();

@@ -358,10 +358,9 @@
         front: Math.min(Math.max(0, Number.isFinite(savedByView.front) ? savedByView.front : fallbackIdx), walls.length - 1),
         plan: Math.min(Math.max(0, Number.isFinite(savedByView.plan) ? savedByView.plan : fallbackIdx), walls.length - 1),
       };
-      _state.currentViewMode = (v.currentViewMode === "front" || v.currentViewMode === "plan")
-        ? v.currentViewMode
-        : "front";
-      _state.activeWallIdx = _state.activeWallByView[_state.currentViewMode];
+      // Always start in front view on project load/refresh.
+      _state.currentViewMode = "front";
+      _state.activeWallIdx = _state.activeWallByView.front;
       _state.selectedIdx = -1;
 
       _state.showDims   = v.showDims  !== false;
